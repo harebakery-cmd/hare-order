@@ -791,26 +791,7 @@ function renderSummary() {
         <tbody id="summaryTbody">${tbody}</tbody>
       </table>
     </div>
-    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px">
-      <div class="confirm-bar" style="flex:1;min-width:240px">
-        <div>
-          <div class="cb-title">🎂 케익팀 확인 완료</div>
-          <div class="cb-desc">케익 카테고리 수량만 초기화됩니다</div>
-        </div>
-        <button class="btn" onclick="confirmReset('cake')" style="background:#e03131;color:#fff;border:none;padding:9px 18px;white-space:nowrap">
-          ✅ 케익팀 확인
-        </button>
-      </div>
-      <div class="confirm-bar" style="flex:1;min-width:240px;background:linear-gradient(135deg,#f0fff4,#d3f9d8);border-color:#8ce99a">
-        <div>
-          <div class="cb-title" style="color:#2f9e44">📦 포장실 확인 완료</div>
-          <div class="cb-desc" style="color:#2f9e44">케익 외 나머지 카테고리 수량이 초기화됩니다</div>
-        </div>
-        <button class="btn" onclick="confirmReset('packing')" style="background:#2f9e44;color:#fff;border:none;padding:9px 18px;white-space:nowrap">
-          ✅ 포장실 확인
-        </button>
-      </div>
-    </div>`;
+  `;
 }
 
 function escAttr(s) { return s.replace(/"/g, '&quot;'); }
