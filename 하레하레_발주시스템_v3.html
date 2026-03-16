@@ -82,11 +82,10 @@ body { font-family: 'Noto Sans KR', sans-serif; background: var(--bg); color: va
 .table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; overflow-x: auto; box-shadow: 0 1px 4px rgba(0,0,0,0.05); margin-bottom: 16px; }
 .order-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; table-layout: fixed; }
 .order-table thead tr { background: var(--surface2); }
-.order-table thead { position: sticky; top: 0; z-index: 10; }
+.order-table thead { }
 .order-table th {
   padding: 10px 6px; font-size: 15px; font-weight: 700; color: var(--text-dim);
   text-align: center; border-bottom: 2px solid var(--border); word-break: keep-all;
-  background: var(--surface2);
 }
 .order-table th:first-child {
   text-align: left; padding-left: 12px; position: sticky; left: 0;
@@ -698,17 +697,6 @@ function renderMain() {
   else if (currentTab === '__admin__')   el.innerHTML = renderAdmin();
   else                                   el.innerHTML = renderStore(currentTab);
   if (currentTab === '__summary__') setTimeout(showScrollHintIfMobile, 0);
-  setTimeout(fixTheadTop, 0);
-}
-
-function fixTheadTop() {
-  const header = document.querySelector('.header');
-  const tabsBar = document.querySelector('.tabs-bar');
-  if (!header || !tabsBar) return;
-  const top = header.offsetHeight + tabsBar.offsetHeight;
-  document.querySelectorAll('.order-table thead').forEach(thead => {
-    thead.style.top = top + 'px';
-  });
 }
 
 function getMasterOrder() {
