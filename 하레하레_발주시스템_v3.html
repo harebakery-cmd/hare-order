@@ -530,6 +530,12 @@ function subscribeConfig(callback) {
           (arr || []).forEach(p => { disabled[sid][p] = true; });
         });
       }
+      if (cfg.hiddenCats) {
+        hiddenCats = {};
+        (cfg.hiddenCats || []).forEach(c => { hiddenCats[c] = true; });
+      } else {
+        hiddenCats = {};
+      }
     } else {
       masterProducts = buildMasterFromProducts();
     }
@@ -614,6 +620,7 @@ let stores   = JSON.parse(JSON.stringify(DEFAULT_STORES));
 let products = JSON.parse(JSON.stringify(DEFAULT_PRODUCTS));
 let masterProducts = {};
 let disabled = {};
+let hiddenCats = {};
 let currentTab = '__summary__';
 let qty = {};
 let draft = {};
@@ -732,6 +739,7 @@ function renderSummary() {
 
   let tbody = '';
   catOrder.forEach(cat => {
+    if (hiddenCats[cat]) return;
     const catRows = [];
     (catProds[cat] || []).forEach(p => {
       const qs = stores.map(s => getQ(s.id, p));
@@ -743,7 +751,8 @@ function renderSummary() {
         <td>${p}${allDisabled ? ' <span style="font-size:10px;color:#bbb">(판매안함)</span>' : ''}</td>
         ${qs.map((q, i) => {
           const dis = isDisabled(stores[i].id, p);
-          return `<td class="${q>0?'cell-has':'cell-zero'}" data-sid="${stores[i].id}" data-prev="${q}"${dis?' style="text-decoration:line-through;opacity:0.4"':''}>${q>0?q:0}</td>`;
+          if (dis) return `<td style="text-align:center;color:#ccc;font-weight:700;font-size:13px">✕</td>`;
+          return `<td class="${q>0?'cell-has':'cell-zero'}" data-sid="${stores[i].id}" data-prev="${q}">${q>0?q:0}</td>`;
         }).join('')}
         <td class="cell-total">${total>0?total:'-'}</td>
       </tr>`);
@@ -974,7 +983,8 @@ function renderAdmin() {
               ondrop="onMasterCatDrop(event,${i})"
               ondragend="onDragEnd()">
               <span class="drag-handle">⠿</span>
-              <span class="drag-item-name">📂 ${c}</span>
+              <span class="drag-item-name" style="${hiddenCats[c]?'opacity:0.4;text-decoration:line-through;':''}">📂 ${c}</span>
+              <button onclick="toggleHiddenCat('${esc(c)}')" style="background:${hiddenCats[c]?'#ffe3e3':'#e8f5e9'};color:${hiddenCats[c]?'#e03131':'#2f9e44'};border:none;border-radius:6px;padding:2px 10px;font-size:11px;font-weight:700;cursor:pointer;margin-right:4px">${hiddenCats[c]?'숨김 🙈':'표시 👁'}</button>
               ${arr.length>1?`<span class="x" onclick="delMasterCat('${esc(c)}')">×</span>`:''}
             </div>`).join('') : '<span style="font-size:12px;color:var(--text-dim)">카테고리 없음</span>'}
         </div>
@@ -1067,6 +1077,11 @@ function delStore(i) {
   toast(`🗑 "${s.label}" 삭제됨`,'success');
 }
 
+function toggleHiddenCat(cat) {
+  hiddenCats[cat] = !hiddenCats[cat];
+  renderMain();
+}
+
 function saveAdmin() {
   const disabledRaw = {};
   Object.entries(disabled).forEach(([sid, obj]) => {
@@ -1078,7 +1093,8 @@ function saveAdmin() {
   masterCatOrder.forEach(cat => { masterProds[cat] = masterProducts[cat]; });
 
   db.ref('config').set({
-    stores, products, masterCatOrder, masterProds, disabled: disabledRaw
+    stores, products, masterCatOrder, masterProds, disabled: disabledRaw,
+    hiddenCats: Object.keys(hiddenCats).filter(c => hiddenCats[c])
   }).then(() => {
     toast('✅ 저장 완료! 모든 기기에 즉시 반영됩니다 🔄', 'success');
   }).catch(() => {
