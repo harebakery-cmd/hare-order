@@ -734,8 +734,12 @@ function renderSummary() {
 
   let thead = `<tr>
     <th>품목</th>
-    ${stores.map(s => `<th>${s.label}</th>`).join('')}
-    <th class="th-total">총합</th>
+    ${stores.map(s => {
+          const shortMap = {'갤러리아점': '갤백'};
+          const short = shortMap[s.label] || (s.label.endsWith('점') ? s.label.slice(0,-1).slice(0,2) : s.label.slice(0,2));
+          return `<th title="${s.label}">${short}</th>`;
+        }).join('')}
+    <th class="th-total">합</th>
   </tr>`;
 
   let tbody = '';
