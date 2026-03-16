@@ -659,7 +659,8 @@ function buildMasterFromProducts() {
 // ══════════════════════════════════════════════
 function init() {
   const d = new Date();
-  d.setDate(d.getDate() + 1); // 기본 날짜를 내일로
+  // 오후 4시 이전이면 어제 날짜, 오후 4시 이후면 오늘 날짜
+  if (d.getHours() < 16) d.setDate(d.getDate() - 1);
   document.getElementById('globalDate').value = d.toISOString().slice(0,10);
   setHeaderSub();
   subscribeConfig(() => {
