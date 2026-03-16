@@ -102,8 +102,8 @@ body { font-family: 'Noto Sans KR', sans-serif; background: var(--bg); color: va
 .order-table tbody tr:hover td:first-child { background: #fafbff; }
 .order-table tbody tr:last-child td { border-bottom: none; }
 .cat-row td {
-  background: var(--surface2) !important; font-size: 11px; font-weight: 800;
-  color: var(--text-dim); padding: 6px 16px !important; text-align: left !important;
+  background: #DBE2EF !important; font-size: 15px; font-weight: 800;
+  color: #1B262C; padding: 6px 16px !important; text-align: left !important;
   border-bottom: 1px solid var(--border) !important; letter-spacing: 0.3px;
   cursor: pointer; user-select: none;
 }
@@ -116,14 +116,14 @@ tr.cat-hidden { display: none; }
 
 .num-input {
   width: 68px; background: var(--surface2); border: 1.5px solid var(--border);
-  border-radius: 7px; padding: 5px 6px; font-size: 15px; font-weight: 600;
+  border-radius: 7px; padding: 5px 6px; font-size: 13px; font-weight: 600;
   color: var(--text); text-align: center; font-family: 'DM Mono', monospace; transition: all 0.15s;
 }
 .num-input:focus { outline: none; border-color: var(--accent); background: var(--accent-light); box-shadow: 0 0 0 3px rgba(59,91,219,0.1); }
 .num-input::-webkit-inner-spin-button, .num-input::-webkit-outer-spin-button { -webkit-appearance: none; }
 
 .cell-total { font-family: 'DM Mono', monospace; font-weight: 800; color: var(--accent); }
-.cell-zero { color: #ced4da; }
+.cell-zero { color: #000; }
 .cell-has { font-weight: 600; }
 .row-disabled td { color: #bbb !important; background: #f8f8f8 !important; }
 .row-disabled td:first-child { color: #bbb !important; }
@@ -276,13 +276,13 @@ tr.cat-hidden { display: none; }
     padding: 10px 14px; border-bottom: 1px solid #f0f2f7;
   }
   .order-table.store-table tbody tr.cat-row {
-    background: var(--surface2) !important;
+    background: #DBE2EF !important;
     padding: 7px 14px !important;
     display: block !important;
   }
   .order-table.store-table tbody tr.cat-row td {
-    font-size: 11px !important; font-weight: 800 !important;
-    color: var(--text-dim) !important; text-align: left !important;
+    font-size: 15px !important; font-weight: 800 !important;
+    color: #1B262C !important; text-align: left !important;
     padding: 0 !important; box-shadow: none !important;
     background: transparent !important;
   }
@@ -743,7 +743,7 @@ function renderSummary() {
         <td>${p}${allDisabled ? ' <span style="font-size:10px;color:#bbb">(판매안함)</span>' : ''}</td>
         ${qs.map((q, i) => {
           const dis = isDisabled(stores[i].id, p);
-          return `<td class="${q>0?'cell-has':'cell-zero'}" data-sid="${stores[i].id}" data-prev="${q}"${dis?' style="text-decoration:line-through;opacity:0.4"':''}>${q>0?q:'-'}</td>`;
+          return `<td class="${q>0?'cell-has':'cell-zero'}" data-sid="${stores[i].id}" data-prev="${q}"${dis?' style="text-decoration:line-through;opacity:0.4"':''}>${q>0?q:0}</td>`;
         }).join('')}
         <td class="cell-total">${total>0?total:'-'}</td>
       </tr>`);
