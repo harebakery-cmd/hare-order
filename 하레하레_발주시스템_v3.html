@@ -659,6 +659,7 @@ function buildMasterFromProducts() {
 // ══════════════════════════════════════════════
 function init() {
   const d = new Date();
+  d.setDate(d.getDate() + 1); // 기본 날짜를 내일로
   document.getElementById('globalDate').value = d.toISOString().slice(0,10);
   setHeaderSub();
   subscribeConfig(() => {
