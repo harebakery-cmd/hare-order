@@ -388,10 +388,15 @@ firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
 
 function getDateKey() {
+  // 총 확인 탭은 항상 어제 날짜
+  if (currentTab === '__summary__') {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    return d.toISOString().slice(0, 10);
+  }
+  // 점포 탭은 date input 기준 (오늘)
   return document.getElementById('globalDate')?.value || new Date().toISOString().slice(0,10);
 }
-
-function qtyRef() { return db.ref('qty/' + getDateKey()); }
 
 // ══════════════════════════════════════════════
 //  키 변환 (Firebase 키 제한 문자 처리)
@@ -659,9 +664,13 @@ function buildMasterFromProducts() {
 // ══════════════════════════════════════════════
 function init() {
   const d = new Date();
-  // 오후 4시 이전이면 어제 날짜, 오후 4시 이후면 오늘 날짜
-  if (d.getHours() < 16) d.setDate(d.getDate() - 1);
   document.getElementById('globalDate').value = d.toISOString().slice(0,10);
+  setHeaderSub();
+  subscribeConfig(() => {
+    buildTabs();
+    subscribeQty();
+  });
+}
   setHeaderSub();
   subscribeConfig(() => {
     buildTabs();
@@ -776,7 +785,11 @@ function renderSummary() {
     <div class="summary-card">
       <div>
         <h2>📋 총 발주 확인</h2>
-        <p>각 점포에서 발주 제출한 수량이 여기에 반영됩니다</p>
+       <p>📅 ${yLabel} 발주 현황 (전날 발주표)</p>
+        // renderSummary() 안에서
+const yesterday = new Date();
+yesterday.setDate(yesterday.getDate() - 1);
+const yLabel = yesterday.toISOString().slice(0,10);</p>
       </div>
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <label style="display:flex;align-items:center;gap:7px;cursor:pointer;background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.3);border-radius:20px;padding:6px 14px;font-size:12px;font-weight:700;white-space:nowrap;color:#fff">
