@@ -380,16 +380,25 @@ firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
 
 // ══════════════════════════════════════════════
-//  날짜 키 — 총 확인 탭은 항상 어제, 점포 탭은 오늘
+//  날짜 키 — 모든 탭 date input 기준
+//  init 시 총 확인 탭 기본값: 16:00 이후 → 오늘(내일발주표), 이전 → 어제(오늘발주표)
 // ══════════════════════════════════════════════
-function getDateKey() {
-  if (currentTab === '__summary__') {
-    // 총 확인 탭: 항상 어제 날짜
-    const d = new Date();
+function getSummaryDateKey() {
+  // 오후 4시(16:00) 이후 → 오늘 날짜 (내일 발주표)
+  // 오전 00:00 ~ 오후 3:59 → 어제 날짜 (오늘 발주표)
+  const now = new Date();
+  const hour = now.getHours();
+  if (hour < 16) {
+    const d = new Date(now);
     d.setDate(d.getDate() - 1);
     return d.toISOString().slice(0, 10);
+  } else {
+    return now.toISOString().slice(0, 10);
   }
-  // 점포 탭 / 기타: date input 기준 (오늘)
+}
+
+function getDateKey() {
+  // 달력 선택값 항상 반영 (총 확인 탭 포함)
   return document.getElementById('globalDate')?.value || new Date().toISOString().slice(0, 10);
 }
 
@@ -644,7 +653,8 @@ function buildMasterFromProducts() {
 // ══════════════════════════════════════════════
 function init() {
   const d = new Date();
-  document.getElementById('globalDate').value = d.toISOString().slice(0, 10);
+  // 총 확인 탭 기본값: 오후 4시 기준 자동 선택
+  document.getElementById('globalDate').value = getSummaryDateKey();
   setHeaderSub();
   subscribeConfig(() => {
     buildTabs();
@@ -665,6 +675,7 @@ function onDateChange() {
   draft = {};
   setHeaderSub();
   subscribeQty();
+  renderMain();
 }
 
 // ══════════════════════════════════════════════
@@ -724,12 +735,12 @@ function renderSummary() {
   const { catOrder, catProds } = getMasterOrder();
   const colCount = stores.length + 2;
 
-  // 어제 날짜 라벨
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  const yLabel = yesterday.toISOString().slice(0, 10);
+  // 날짜 라벨 (오후 4시 이후: 오늘 / 오전~오후 3시: 어제)
+  const yLabel = getSummaryDateKey();
   const yDate = new Date(yLabel + 'T00:00:00');
   const days = ['일','월','화','수','목','금','토'];
+  const _now = new Date();
+  const isPM4 = _now.getHours() >= 16;
   const yLabelKr = `${yDate.getMonth()+1}월 ${yDate.getDate()}일 (${days[yDate.getDay()]})`;
 
   let thead = `<tr>
@@ -778,7 +789,7 @@ function renderSummary() {
     <div class="summary-card">
       <div>
         <h2>📋 총 발주 확인</h2>
-        <p>📅 ${yLabelKr} 발주 현황 (전날 발주표)</p>
+        <p>📅 ${yLabelKr} 발주 현황 ${isPM4 ? '(내일 발주표)' : '(오늘 발주표)'}</p>
       </div>
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <label style="display:flex;align-items:center;gap:7px;cursor:pointer;background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.3);border-radius:20px;padding:6px 14px;font-size:12px;font-weight:700;white-space:nowrap;color:#fff">
@@ -795,7 +806,7 @@ function renderSummary() {
       </div>
       <div style="display:none;flex-wrap:wrap;gap:8px;padding:0 18px 14px 18px;">${resetButtons}</div>
     </div>
-    <div class="notice-bar">🔒 이 탭은 읽기 전용입니다. 수량 입력은 각 점포 탭 → <strong>발주 제출</strong> 버튼으로 반영하세요.${summaryShowAll?' <strong>· 전체 품목 표시 중</strong>':''} <span id="scrollHint" style="display:none"></span></div>
+    <div class="notice-bar">🔒 이 탭은 읽기 전용입니다. 수량 입력은 각 점포 탭 → <strong>발주 제출</strong> 버튼으로 반영하세요.${summaryShowAll?' <strong>· 전체 품목 표시 중</strong>':''} <span id="scrollHint" style="display:none"> · 👈 좌우로 스크롤</span></div>
     <div class="table-wrap">
       <table class="order-table">
         <thead>${thead}</thead>
