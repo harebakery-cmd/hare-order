@@ -381,25 +381,93 @@ const db = firebase.database();
 
 // ══════════════════════════════════════════════
 //  날짜 키 — 모든 탭 date input 기준
-//  init 시 총 확인 탭 기본값: 16:00 이후 → 오늘(내일발주표), 이전 → 어제(오늘발주표)
+//
+//  [총 확인 탭 기본 날짜 규칙]
+//  발주 데이터는 항상 "입력한 날" 날짜로 저장됨
+//  출고는 다음날 → 총 확인은 "어제 발주 = 오늘 출고" 를 기본으로 표시
+//
+//  오전 00:00 ~ 오후 3:59 → 어제 날짜 (어제 발주 = 오늘 출고분)
+//  오후 4:00 ~ 23:59      → 오늘 날짜 (오늘 발주 = 내일 출고분) ← 지금 막 입력 중인 것 확인용
 // ══════════════════════════════════════════════
+// 로컬 날짜를 YYYY-MM-DD 문자열로 반환 (UTC 오류 방지)
+function localDateStr(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+// 오늘 로컬 날짜 문자열
+function todayLocal() { return localDateStr(new Date()); }
+
+// n일 후/전 로컬 날짜 문자열
+function offsetDate(n) {
+  const d = new Date(); d.setDate(d.getDate() + n); return localDateStr(d);
+}
+
 function getSummaryDateKey() {
-  // 오후 4시(16:00) 이후 → 오늘 날짜 (내일 발주표)
-  // 오전 00:00 ~ 오후 3:59 → 어제 날짜 (오늘 발주표)
-  const now = new Date();
-  const hour = now.getHours();
+  const hour = new Date().getHours();
   if (hour < 16) {
-    const d = new Date(now);
-    d.setDate(d.getDate() - 1);
-    return d.toISOString().slice(0, 10);
+    // 오전~오후 3시: 어제 발주 = 오늘 출고분 보여주기
+    return offsetDate(-1);
   } else {
-    return now.toISOString().slice(0, 10);
+    // 오후 4시 이후: 오늘 발주 = 내일 출고분 입력 확인
+    return todayLocal();
   }
 }
 
 function getDateKey() {
   // 달력 선택값 항상 반영 (총 확인 탭 포함)
-  return document.getElementById('globalDate')?.value || new Date().toISOString().slice(0, 10);
+  return document.getElementById('globalDate')?.value || todayLocal();
+}
+
+// ══════════════════════════════════════════════
+//  발주분 / 출고분 라벨
+//
+//  [규칙]
+//  · 발주 데이터는 "입력한 날" 기준으로 저장됨
+//  · 출고는 그 다음날 → 데이터 날짜 +1일 = 출고일
+//
+//  예) 13일 데이터
+//    - 13일 오후 4시 이후 조회 → "내일 발주분" (출고일=14일)
+//    - 14일 조회              → "오늘 출고분" (출고일=오늘)
+//    - 15일 이후 조회         → "X월X일 출고분 (과거)"
+//
+//  getSummaryDateKey()가 오후 4시 기준으로 날짜를 잡아주므로
+//  총 확인 탭은 항상 맞는 데이터를 가리키고 있음
+// ══════════════════════════════════════════════
+function getOrderLabel(targetDateStr) {
+  // targetDateStr: 발주 데이터가 저장된 날짜 (입력한 날)
+  // 출고일 = 발주 날짜 + 1일
+  //
+  // 예) 13일 발주 데이터
+  //   13일 오후 4시 이후 조회 → 출고일(14일) = 내일 → "내일 출고분"
+  //   14일 오전~오후 3시 조회 → 출고일(14일) = 오늘 → "오늘 출고분"
+  //   15일 이후 조회          → 출고일(14일) 지남  → "X월X일 출고분 (과거)"
+
+  const today = todayLocal();
+  const tomorrow = offsetDate(+1);
+  const days = ['일','월','화','수','목','금','토'];
+
+  const dataDate = new Date(targetDateStr + 'T00:00:00');
+  const md = `${dataDate.getMonth()+1}월 ${dataDate.getDate()}일(${days[dataDate.getDay()]})`;
+
+  // 출고일 = 발주 날짜 + 1일 (로컬 기준)
+  const shipDate = new Date(targetDateStr + 'T00:00:00');
+  shipDate.setDate(shipDate.getDate() + 1);
+  const shipStr = localDateStr(shipDate);
+  const sm = `${shipDate.getMonth()+1}월 ${shipDate.getDate()}일(${days[shipDate.getDay()]})`;
+
+  if (shipStr === today) {
+    return { text: `📦 오늘 출고분 · ${md} 발주`, color: '#2f9e44', bg: '#ebfbee', border: '#8ce99a' };
+  }
+  if (shipStr === tomorrow) {
+    return { text: `📦 내일 출고분 · ${md} 발주`, color: '#7950f2', bg: '#f3f0ff', border: '#b197fc' };
+  }
+  if (shipStr > today) {
+    return { text: `📦 ${sm} 출고분 · ${md} 발주`, color: '#1971c2', bg: '#e7f5ff', border: '#74c0fc' };
+  }
+  return { text: `📦 ${sm} 출고분 (과거) · ${md} 발주`, color: '#868e96', bg: '#f8f9fa', border: '#dee2e6' };
 }
 
 function qtyRef() { return db.ref('qty/' + getDateKey()); }
@@ -652,13 +720,36 @@ function buildMasterFromProducts() {
 //  INIT — 점포 탭 기본 날짜는 오늘
 // ══════════════════════════════════════════════
 function init() {
-  const d = new Date();
   // 총 확인 탭 기본값: 오후 4시 기준 자동 선택
   document.getElementById('globalDate').value = getSummaryDateKey();
   setHeaderSub();
   subscribeConfig(() => {
     buildTabs();
     subscribeQty();
+    autoDeleteOldData();
+  });
+}
+
+// ══════════════════════════════════════════════
+//  2주(14일) 이전 데이터 자동 삭제
+// ══════════════════════════════════════════════
+function autoDeleteOldData() {
+  const cutoffStr = offsetDate(-14);
+
+  db.ref('qty').once('value', snap => {
+    if (!snap.exists()) return;
+    const updates = {};
+    snap.forEach(child => {
+      const dateKey = child.key; // e.g. "2025-03-01"
+      if (dateKey < cutoffStr) {
+        updates[dateKey] = null; // 삭제
+      }
+    });
+    if (Object.keys(updates).length > 0) {
+      db.ref('qty').update(updates).then(() => {
+        console.log('🗑 오래된 발주 데이터 자동 삭제:', Object.keys(updates));
+      });
+    }
   });
 }
 
@@ -693,8 +784,18 @@ function buildTabs() {
 
 function switchTab(id) {
   currentTab = id;
+  // 탭에 맞게 달력 날짜 자동 전환
+  if (id === '__summary__') {
+    // 총 확인: 오후 4시 기준 자동
+    document.getElementById('globalDate').value = getSummaryDateKey();
+  } else if (id !== '__admin__') {
+    // 점포 탭: 항상 오늘 날짜 (발주 입력용)
+    document.getElementById('globalDate').value = todayLocal();
+  }
+  setHeaderSub();
+  qty = {};
+  draft = {};
   buildTabs();
-  // 탭 전환 시 해당 날짜의 qty 재구독
   subscribeQty();
   renderMain();
 }
@@ -735,13 +836,19 @@ function renderSummary() {
   const { catOrder, catProds } = getMasterOrder();
   const colCount = stores.length + 2;
 
-  // 날짜 라벨 (오후 4시 이후: 오늘 / 오전~오후 3시: 어제)
-  const yLabel = getSummaryDateKey();
-  const yDate = new Date(yLabel + 'T00:00:00');
+  // 날짜 라벨 (오후 4시 이후: 내일 발주표 / 오전~오후 3시: 오늘 발주표)
+  const selectedDate = getDateKey();
+  const yDate = new Date(selectedDate + 'T00:00:00');
   const days = ['일','월','화','수','목','금','토'];
-  const _now = new Date();
-  const isPM4 = _now.getHours() >= 16;
+  const isPM4 = new Date().getHours() >= 16;
   const yLabelKr = `${yDate.getMonth()+1}월 ${yDate.getDate()}일 (${days[yDate.getDay()]})`;
+
+  // 데이터 날짜 기준으로 출고분 라벨 결정
+  const _sol = getOrderLabel(selectedDate);
+  const orderBadgeText = _sol.text;
+  const orderBadgeColor = _sol.color;
+  const orderBadgeBg = _sol.bg;
+  const orderBadgeBorder = _sol.border;
 
   let thead = `<tr>
     <th>품목</th>
@@ -789,9 +896,10 @@ function renderSummary() {
     <div class="summary-card">
       <div>
         <h2>📋 총 발주 확인</h2>
-        <p>📅 ${yLabelKr} 발주 현황 ${isPM4 ? '(내일 발주표)' : '(오늘 발주표)'}</p>
+        <p>📅 ${yLabelKr} 발주 현황</p>
       </div>
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span style="font-size:13px;font-weight:900;color:${orderBadgeColor};background:${orderBadgeBg};border:2px solid ${orderBadgeBorder};border-radius:20px;padding:6px 16px;white-space:nowrap">${orderBadgeText}</span>
         <label style="display:flex;align-items:center;gap:7px;cursor:pointer;background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.3);border-radius:20px;padding:6px 14px;font-size:12px;font-weight:700;white-space:nowrap;color:#fff">
           <input type="checkbox" id="summaryShowAllChk" ${summaryShowAll?'checked':''} onchange="summaryShowAll=this.checked;renderMain()" style="width:14px;height:14px;cursor:pointer;accent-color:#3b5bdb">
           품목 전체 보기
@@ -837,26 +945,10 @@ function renderStore(sid) {
   const dateVal = document.getElementById('globalDate').value;
   const sortedProds = getSortedStoreProds(sid);
 
-  // 오후 4시 기준: 지금 입력하는 발주가 어느 날 발주분인지 표기
-  const nowHour = new Date().getHours();
-  const todayStr = new Date().toISOString().slice(0, 10);
-  const isToday = dateVal === todayStr;
-  let orderLabel, orderLabelColor;
-  if (isToday) {
-    if (nowHour >= 16) {
-      orderLabel = '📦 내일 발주분';
-      orderLabelColor = '#7950f2';
-    } else {
-      orderLabel = '📦 오늘 발주분';
-      orderLabelColor = '#2f9e44';
-    }
-  } else {
-    // 달력으로 다른 날짜 선택한 경우
-    const days = ['일','월','화','수','목','금','토'];
-    const d = new Date(dateVal + 'T00:00:00');
-    orderLabel = `📦 ${d.getMonth()+1}월 ${d.getDate()}일(${days[d.getDay()]}) 발주분`;
-    orderLabelColor = '#e67700';
-  }
+  // 데이터 날짜 기준으로 출고분 라벨 결정
+  const _ol = getOrderLabel(dateVal);
+  const orderLabel = _ol.text;
+  const orderLabelColor = _ol.color;
 
   if (!draft[sid]) draft[sid] = {};
 
