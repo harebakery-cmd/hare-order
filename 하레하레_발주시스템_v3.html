@@ -258,6 +258,39 @@ tr.cat-hidden { display: none; }
 
 @keyframes toastIn { from { transform: translateX(20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
 
+/* 총확인 탭 - 수정 버튼으로 변경된 셀만 분홍 강조 */
+.cell-modified { background: #fff0f6 !important; color: #c2255c !important; font-weight: 800 !important; }
+
+/* 품목별 수정 버튼 */
+.btn-edit-item {
+  padding: 4px 10px; font-size: 11px; font-weight: 700;
+  border-radius: 7px; border: 1.5px solid var(--border);
+  background: var(--surface2); color: var(--accent);
+  cursor: pointer; white-space: nowrap;
+  transition: all 0.15s; font-family: 'Noto Sans KR', sans-serif;
+  min-width: 44px; text-align: center;
+}
+.btn-edit-item:hover { background: var(--accent-light); border-color: var(--accent); }
+.btn-edit-item.saving { opacity: 0.5; pointer-events: none; }
+.btn-edit-item.done { background: #ebfbee; border-color: #8ce99a; color: #2f9e44; pointer-events: none; }
+@media (max-width: 600px) {
+  .btn-edit-item { padding: 5px 8px; min-height: 36px; }
+}
+
+/* 스켈레톤 로더 */
+@keyframes skelShimmer {
+  0% { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+.skel {
+  border-radius: 6px;
+  background: linear-gradient(90deg, #e9ecef 25%, #f1f3f5 50%, #e9ecef 75%);
+  background-size: 800px 100%;
+  animation: skelShimmer 1.4s infinite linear;
+}
+.skel-text { height: 14px; margin: 4px 0; }
+.skel-input { width: 68px; height: 32px; border-radius: 7px; margin: 0 auto; }
+
 @media (max-width: 600px) {
   .header { padding: 0 10px; height: 52px; }
   .logo { width: 30px; height: 30px; font-size: 12px; border-radius: 8px; }
@@ -274,7 +307,7 @@ tr.cat-hidden { display: none; }
   .order-table.store-table tbody { display: flex; flex-direction: column; gap: 0; }
   .order-table.store-table tbody tr {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 10px 14px; border-bottom: 1px solid #f0f2f7;
+    padding: 10px 14px; border-bottom: 1px solid #f0f2f7; gap: 8px;
   }
   .order-table.store-table tbody tr.cat-row {
     background: #DBE2EF !important;
@@ -292,7 +325,7 @@ tr.cat-hidden { display: none; }
     min-width: unset !important; font-size: 13px !important;
     flex: 1; padding: 0 !important; background: transparent !important;
   }
-  .order-table.store-table tbody tr td:last-child { padding: 0 !important; }
+  .order-table.store-table tbody tr td:last-child { padding: 0 4px !important; flex-shrink: 0; }
   .order-table.store-table tbody tr:hover { background: #fafbff; }
   .num-input {
     width: 72px; height: 38px; font-size: 16px !important;
@@ -470,7 +503,8 @@ function getOrderLabel(targetDateStr) {
   return { text: `📦 ${sm} 출고분 (과거) · ${md} 발주`, color: '#868e96', bg: '#f8f9fa', border: '#dee2e6' };
 }
 
-function qtyRef() { return db.ref('qty/' + getDateKey()); }
+function qtyRef()          { return db.ref('qty/' + getDateKey()); }
+function storeQtyRef(sid)  { return db.ref('qty/' + getDateKey() + '/' + sid); }
 
 function safeKey(p) {
   return p.replace(/[.#$\[\]\/]/g, '_');
@@ -483,18 +517,25 @@ function setDraft(sid, p, v) {
   const n = parseInt(v);
   const k = safeKey(p);
   draft[sid][k] = (isNaN(n) || n < 0) ? 0 : n;
-  updateSubmitBar(sid);
+  // updateSubmitBar는 onQtyInput의 디바운스에서 호출
 }
 
 function fbSubmitStore(sid) {
+  // draft에 있는 변경분만 update() → 다른 품목 데이터 보존
   const updates = {};
-  document.querySelectorAll(`.num-input[data-sid="${sid}"]`).forEach(inp => {
-    const p = inp.getAttribute('data-prod');
-    const n = parseInt(inp.value);
-    const key = safeKey(p);
-    updates[key] = (isNaN(n) || n < 0) ? 0 : n;
+  const d = draft[sid] || {};
+
+  Object.keys(d).forEach(k => {
+    const n = d[k] ?? 0;
+    // 0이면 null로 설정해서 해당 키 삭제, 양수면 업데이트
+    updates[k] = n > 0 ? n : null;
   });
-  return qtyRef().child(sid).update(updates);
+
+  if (Object.keys(updates).length === 0) {
+    // 변경사항 없으면 바로 resolve
+    return Promise.resolve();
+  }
+  return storeQtyRef(sid).update(updates);
 }
 
 db.ref('.info/connected').on('value', snap => {
@@ -510,18 +551,89 @@ db.ref('.info/connected').on('value', snap => {
 });
 
 // ══════════════════════════════════════════════
-//  qty 구독
+//  qty 구독 — 총확인: 실시간 on() / 점포탭: 초기 once() 로드
 // ══════════════════════════════════════════════
 let qtyListener = null;
+let qtyListenerSid = null;   // 현재 리스너가 구독 중인 점포 ID
+let qtyListenerDate = null;  // 현재 리스너가 구독 중인 날짜
+let qtyLoaded = false;
 
 function subscribeQty() {
-  if (qtyListener) { qtyRef().off('value', qtyListener); }
-  qtyListener = qtyRef().on('value', snap => {
-    qty = snap.val() || {};
-    if (currentTab === '__summary__') {
-      updateSummaryTable();
+  // 기존 리스너 해제
+  if (qtyListener) {
+    // 이전 리스너가 점포용이면 점포 경로에서, 아니면 전체 경로에서 해제
+    if (qtyListenerSid) {
+      db.ref('qty/' + qtyListenerDate + '/' + qtyListenerSid).off('value', qtyListener);
+    } else {
+      db.ref('qty/' + qtyListenerDate).off('value', qtyListener);
     }
-  });
+    qtyListener = null; qtyListenerSid = null; qtyListenerDate = null;
+  }
+
+  if (currentTab === '__summary__') {
+    // 총확인: 날짜 전체 실시간 구독
+    const dateKey = getDateKey();
+    qtyListenerDate = dateKey; qtyListenerSid = null;
+    qtyListener = db.ref('qty/' + dateKey).on('value', snap => {
+      qty = snap.val() || {};
+      updateSummaryTable();
+    });
+  } else if (currentTab !== '__admin__') {
+    // 점포탭: 해당 점포 경로만 구독 → 데이터 양이 1/N으로 줄어 빠름
+    const sid = currentTab;
+    const dateKey = getDateKey();
+    qtyListenerDate = dateKey; qtyListenerSid = sid;
+    showStoreSkeleton(sid);
+    qtyLoaded = false;
+    qtyListener = db.ref('qty/' + dateKey + '/' + sid).on('value', snap => {
+      qty[sid] = snap.val() || {};
+      if (currentTab !== sid) return;
+      if (!qtyLoaded) {
+        // 첫 로드: 전체 렌더
+        qtyLoaded = true;
+        renderMain();
+      } else {
+        // 이후 변경: 입력 필드 값만 부분 업데이트 (수정버튼 결과 반영)
+        document.querySelectorAll(`.num-input[data-sid="${sid}"]`).forEach(inp => {
+          const k = safeKey(inp.getAttribute('data-prod'));
+          const newVal = qty[sid]?.[k] ?? 0;
+          // 포커스 중인 칸은 건드리지 않음
+          if (document.activeElement !== inp) {
+            inp.value = newVal > 0 ? newVal : '';
+
+          }
+        });
+      }
+    });
+  }
+}
+
+function showStoreSkeleton(sid) {
+  const store = stores.find(s => s.id === sid);
+  if (!store) return;
+  const el = document.getElementById('mainContent');
+  const skRows = Array(8).fill(0).map(() => `
+    <tr>
+      <td><div class="skel skel-text" style="width:${60+Math.random()*30|0}%"></div></td>
+      <td><div class="skel skel-input"></div></td>
+    </tr>`).join('');
+  el.innerHTML = `
+    <div class="store-card">
+      <div>
+        <div class="store-name">🏪 ${store.label}</div>
+        <div style="font-size:12px;color:var(--text-dim);margin-top:3px">데이터 불러오는 중...</div>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table class="order-table store-table" style="min-width:280px">
+        <thead><tr>
+          <th style="text-align:left;padding-left:16px;min-width:150px">품목</th>
+          <th style="min-width:90px">수량</th>
+          <th style="min-width:60px"></th>
+        </tr></thead>
+        <tbody>${skRows}</tbody>
+      </table>
+    </div>`;
 }
 
 function updateSummaryTable() {
@@ -544,7 +656,8 @@ function updateSummaryTable() {
         const cur = String(q);
         if (prev !== cur) {
           cell.textContent = q > 0 ? q : '-';
-          cell.className = q > 0 ? 'cell-has' : 'cell-zero';
+          const _isMod = modifiedItems.has(s.id + '|' + safeKey(p));
+          cell.className = (q > 0 ? 'cell-has' : 'cell-zero') + (_isMod ? ' cell-modified' : '');
           if (isDisabled(s.id, p)) cell.style.cssText = 'text-decoration:line-through;opacity:0.4';
           cell.setAttribute('data-prev', cur);
           row.classList.remove('row-flash');
@@ -696,6 +809,7 @@ const DEFAULT_PRODUCTS = {
 //  STATE
 // ══════════════════════════════════════════════
 let stores   = JSON.parse(JSON.stringify(DEFAULT_STORES));
+const modifiedItems = new Set(); // 수정 버튼으로 변경된 항목 추적 "sid|safeKey" 형태
 let products = JSON.parse(JSON.stringify(DEFAULT_PRODUCTS));
 let masterProducts = {};
 let disabled = {};
@@ -787,18 +901,24 @@ function switchTab(id) {
   currentTab = id;
   // 탭에 맞게 달력 날짜 자동 전환
   if (id === '__summary__') {
-    // 총 확인: 오후 4시 기준 자동
     document.getElementById('globalDate').value = getSummaryDateKey();
-  } else if (id !== '__admin__') {
-    // 점포 탭: 항상 오늘 날짜 (발주 입력용)
+    setHeaderSub();
+    qty = {};
+    buildTabs();
+    subscribeQty();      // 총확인: 실시간 구독
+    renderMain();
+  } else if (id === '__admin__') {
+    buildTabs();
+    renderMain();
+  } else {
+    // 점포 탭: 날짜 세팅 후 스켈레톤 → once() 로드
     document.getElementById('globalDate').value = todayLocal();
+    setHeaderSub();
+    // 해당 점포 draft는 유지, qty만 초기화
+    qty = {};
+    buildTabs();
+    subscribeQty();      // 점포탭: once() 로드 → renderMain 자동 호출
   }
-  setHeaderSub();
-  qty = {};
-  draft = {};
-  buildTabs();
-  subscribeQty();
-  renderMain();
 }
 
 // ══════════════════════════════════════════════
@@ -876,7 +996,8 @@ function renderSummary() {
         ${qs.map((q, i) => {
           const dis = isDisabled(stores[i].id, p);
           if (dis) return `<td style="text-align:center;color:#ccc;font-weight:700;font-size:15px">✕</td>`;
-          return `<td class="${q>0?'cell-has':'cell-zero'}" data-sid="${stores[i].id}" data-prev="${q}">${q>0?q:0}</td>`;
+          const isMod = modifiedItems.has(stores[i].id + '|' + safeKey(p));
+          return `<td class="${q>0?'cell-has':'cell-zero'}${isMod?' cell-modified':''}" data-sid="${stores[i].id}" data-prev="${q}">${q>0?q:0}</td>`;
         }).join('')}
         <td class="cell-total">${total>0?total:'-'}</td>
       </tr>`);
@@ -955,7 +1076,7 @@ function renderStore(sid) {
 
   let rows = '';
   Object.entries(sortedProds).forEach(([cat, prods]) => {
-    rows += `<tr class="cat-row" onclick="toggleCat(this)"><td colspan="2">📂 ${cat} <span class="cat-toggle">▼</span></td></tr>`;
+    rows += `<tr class="cat-row" onclick="toggleCat(this)"><td colspan="3">📂 ${cat} <span class="cat-toggle">▼</span></td></tr>`;
     prods.forEach(p => {
       const k = safeKey(p);
       const q = (draft[sid] && k in draft[sid]) ? draft[sid][k] : (qty[sid]?.[k] ?? 0);
@@ -966,6 +1087,9 @@ function renderStore(sid) {
           data-sid="${sid}" data-prod="${escAttr(p)}"
           oninput="onQtyInput(this,'${sid}',${JSON.stringify(p)})"
           onfocus="this.select()"></td>
+        <td style="padding:4px 6px;text-align:center">
+          <button class="btn-edit-item" data-sid="${sid}" data-prod="${escAttr(p)}" onclick="saveItem(this)">수정</button>
+        </td>
       </tr>`;
     });
   });
@@ -984,12 +1108,13 @@ function renderStore(sid) {
         <button class="btn btn-danger" onclick="clearDraft('${sid}')" style="min-height:36px">🗑 초기화</button>
       </div>
     </div>
-    <div class="notice-bar" id="draftNotice">✏️ 수량을 입력하고 <strong>발주 제출</strong> 버튼을 누르세요. 제출 후에도 수량을 바꾸고 다시 제출하면 언제든 수정됩니다.</div>
+    <div class="notice-bar" id="draftNotice">✏️ 수량 입력 후 품목별 <strong>수정</strong> 버튼으로 개별 저장하거나, 아래 <strong>발주 제출</strong> 버튼으로 전체 반영하세요.</div>
     <div class="table-wrap">
       <table class="order-table store-table" style="min-width:280px">
         <thead><tr>
           <th style="text-align:left;padding-left:16px;min-width:150px">품목</th>
-          <th style="min-width:100px">수량</th>
+          <th style="min-width:90px">수량</th>
+          <th style="min-width:60px"></th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
@@ -1029,8 +1154,64 @@ function updateSubmitBar(sid) {
   }
 }
 
+// 품목별 개별 수정 저장
+function saveItem(btn) {
+  const sid = btn.getAttribute('data-sid');
+  const p   = btn.getAttribute('data-prod');
+  const row = btn.closest('tr');
+  const inp = row ? row.querySelector('.num-input') : null;
+  if (!inp || !sid || !p) return;
+
+  const n = parseInt(inp.value) || 0;
+  const k = safeKey(p);
+  const update = {};
+  update[k] = n > 0 ? n : null;
+
+  btn.textContent = '저장중';
+  btn.className = 'btn-edit-item saving';
+
+  storeQtyRef(sid).update(update).then(() => {
+    // 로컬 qty 즉시 반영
+    if (!qty[sid]) qty[sid] = {};
+    if (n > 0) qty[sid][k] = n;
+    else delete qty[sid][k];
+    if (draft[sid]) delete draft[sid][k];
+
+    modifiedItems.add(sid + '|' + k);
+    btn.textContent = '완료 ✓';
+    btn.className = 'btn-edit-item done';
+
+    updateSubmitBar(sid);
+    toast(`✅ ${p} 수정 완료! 총 확인에 반영됐습니다`, 'success');
+    // 2초 후 "수정"으로 복원
+    setTimeout(() => {
+      btn.textContent = '수정';
+      btn.className = 'btn-edit-item';
+    }, 2000);
+  }).catch(() => {
+    btn.textContent = '수정';
+    btn.className = 'btn-edit-item';
+    toast('⚠️ 저장 실패 — 네트워크를 확인해주세요', 'error');
+  });
+}
+
+// 디바운스 타이머 맵 (품목별 독립 타이머)
+const _debounceTimers = {};
+
 function onQtyInput(inp, sid, p) {
   setDraft(sid, p, inp.value);
+  const n = parseInt(inp.value) || 0;
+
+  // 수정 버튼 원래대로 복원 (값 바꾸면 다시 "수정"으로)
+  const row = inp.closest('tr');
+  if (row) {
+    const editBtn = row.querySelector('.btn-edit-item');
+    if (editBtn) { editBtn.textContent = '수정'; editBtn.className = 'btn-edit-item'; }
+  }
+
+  const key = sid + '|' + p;
+  clearTimeout(_debounceTimers[key]);
+  _debounceTimers[key] = setTimeout(() => { updateSubmitBar(sid); }, 300);
 }
 
 function submitStore(sid) {
@@ -1039,7 +1220,7 @@ function submitStore(sid) {
   if (btn) { btn.textContent = '⏳ 제출 중...'; btn.disabled = true; }
 
   fbSubmitStore(sid).then(() => {
-    // 제출된 값을 qty에 반영하고 draft 초기화
+    // 제출된 값을 qty에 반영하고 draft 초기화 (DOM 재생성 없이 부분 업데이트)
     if (!qty[sid]) qty[sid] = {};
     const inputs = document.querySelectorAll(`.num-input[data-sid="${sid}"]`);
     inputs.forEach(inp => {
@@ -1049,9 +1230,11 @@ function submitStore(sid) {
       else delete qty[sid][k];
     });
     draft[sid] = {};
+    // submit bar만 업데이트 (전체 renderMain 호출 불필요)
+    const titleEl = document.getElementById('sbTitle');
+    if (titleEl) titleEl.textContent = '✅ 제출 완료';
+    if (btn) { btn.textContent = '📤 발주 제출'; btn.disabled = false; btn.style.opacity = '1'; }
     toast(`✅ ${store.label} 발주 제출 완료! 수정하려면 수량을 바꾸고 다시 제출하세요`, 'success');
-    // 화면 다시 렌더링 → 수정 가능 상태로 복원
-    renderMain();
   }).catch(() => {
     toast('⚠️ 제출 실패 — 네트워크를 확인해주세요', 'error');
     if (btn) { btn.textContent = '📤 발주 제출'; btn.disabled = false; }
