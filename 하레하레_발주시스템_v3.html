@@ -449,6 +449,15 @@ function getSummaryDateKey() {
   }
 }
 
+function resetSummaryDate() {
+  // 총 확인 탭의 날짜를 4시 규칙 기본값으로 리셋
+  document.getElementById('globalDate').value = getSummaryDateKey();
+  setHeaderSub();
+  qty = {};
+  subscribeQty();
+  renderMain();
+}
+
 function getDateKey() {
   // 달력 선택값 항상 반영 (총 확인 탭 포함)
   return document.getElementById('globalDate')?.value || todayLocal();
@@ -899,9 +908,10 @@ function buildTabs() {
 
 function switchTab(id) {
   currentTab = id;
-  // 탭에 맞게 달력 날짜 자동 전환
   if (id === '__summary__') {
-    document.getElementById('globalDate').value = getSummaryDateKey();
+    // 총 확인 탭: 날짜를 강제로 바꾸지 않음
+    // → 점포에서 발주 제출(오늘) 후 총 확인으로 이동해도 날짜 그대로 유지
+    // → 최초 진입 기본값은 init()의 getSummaryDateKey() 에서만 결정 (오후4시 규칙)
     setHeaderSub();
     qty = {};
     buildTabs();
@@ -1026,6 +1036,7 @@ function renderSummary() {
           <input type="checkbox" id="summaryShowAllChk" ${summaryShowAll?'checked':''} onchange="summaryShowAll=this.checked;renderMain()" style="width:14px;height:14px;cursor:pointer;accent-color:#3b5bdb">
           품목 전체 보기
         </label>
+        <button onclick="resetSummaryDate()" style="background:rgba(255,255,255,0.18);border:1px solid rgba(255,255,255,0.35);border-radius:20px;padding:5px 14px;font-size:11px;font-weight:700;color:#fff;cursor:pointer;white-space:nowrap">📅 기본 날짜로</button>
         <div class="live-badge"><span class="live-dot"></span>실시간</div>
       </div>
     </div>
@@ -1036,7 +1047,7 @@ function renderSummary() {
       </div>
       <div style="display:none;flex-wrap:wrap;gap:8px;padding:0 18px 14px 18px;">${resetButtons}</div>
     </div>
-    <div class="notice-bar">🔒 이 탭은 읽기 전용입니다. 수량 입력은 각 점포 탭 → <strong>발주 제출</strong> 버튼으로 반영하세요.${summaryShowAll?' <strong>· 전체 품목 표시 중</strong>':''} <span id="scrollHint" style="display:none"> · 👈 좌우로 스크롤</span></div>
+    <div class="notice-bar">🔒 읽기 전용 · 점포 탭에서 <strong>발주 제출</strong> 후 바로 이 탭에 반영됩니다 · 기본날짜: 오전~오후3시=어제, 오후4시~=오늘 (직접 변경 가능)${summaryShowAll?' <strong>· 전체 품목 표시 중</strong>':''} <span id="scrollHint" style="display:none"> · 👈 좌우로 스크롤</span></div>
     <div class="table-wrap">
       <table class="order-table">
         <thead>${thead}</thead>
