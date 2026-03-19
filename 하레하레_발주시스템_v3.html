@@ -602,15 +602,14 @@ function subscribeQty() {
         qtyLoaded = true;
         renderMain();
       } else {
-        // 이후 변경: 입력 필드 값만 부분 업데이트 (수정버튼 결과 반영)
+        // 이후 변경: 입력 필드 값만 부분 업데이트
+        // ※ 포커스 중이거나 draft에 편집 중인 칸은 건드리지 않음 (입력값 보호)
         document.querySelectorAll(`.num-input[data-sid="${sid}"]`).forEach(inp => {
           const k = safeKey(inp.getAttribute('data-prod'));
+          const inDraft = draft[sid] && k in draft[sid];
+          if (document.activeElement === inp || inDraft) return;
           const newVal = qty[sid]?.[k] ?? 0;
-          // 포커스 중인 칸은 건드리지 않음
-          if (document.activeElement !== inp) {
-            inp.value = newVal > 0 ? newVal : '';
-
-          }
+          inp.value = newVal > 0 ? newVal : '';
         });
       }
     });
@@ -1231,12 +1230,11 @@ function submitStore(sid) {
   if (btn) { btn.textContent = '⏳ 제출 중...'; btn.disabled = true; }
 
   fbSubmitStore(sid).then(() => {
-    // 제출된 값을 qty에 반영하고 draft 초기화 (DOM 재생성 없이 부분 업데이트)
+    // draft에 있던 항목만 qty에 반영 (전체 input 스캔 금지 — 다른 카테고리 데이터 삭제 방지)
     if (!qty[sid]) qty[sid] = {};
-    const inputs = document.querySelectorAll(`.num-input[data-sid="${sid}"]`);
-    inputs.forEach(inp => {
-      const k = safeKey(inp.getAttribute('data-prod'));
-      const n = parseInt(inp.value) || 0;
+    const submitted = draft[sid] || {};
+    Object.keys(submitted).forEach(k => {
+      const n = submitted[k] ?? 0;
       if (n > 0) qty[sid][k] = n;
       else delete qty[sid][k];
     });
