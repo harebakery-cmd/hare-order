@@ -449,15 +449,6 @@ function getSummaryDateKey() {
   }
 }
 
-function resetSummaryDate() {
-  // 총 확인 탭의 날짜를 4시 규칙 기본값으로 리셋
-  document.getElementById('globalDate').value = getSummaryDateKey();
-  setHeaderSub();
-  qty = {};
-  subscribeQty();
-  renderMain();
-}
-
 function getDateKey() {
   // 달력 선택값 항상 반영 (총 확인 탭 포함)
   return document.getElementById('globalDate')?.value || todayLocal();
@@ -512,14 +503,18 @@ function getOrderLabel(targetDateStr) {
   return { text: `📦 ${sm} 출고분 (과거) · ${md} 발주`, color: '#868e96', bg: '#f8f9fa', border: '#dee2e6' };
 }
 
-function qtyRef()          { return db.ref('qty/' + getDateKey()); }
-function storeQtyRef(sid)  { return db.ref('qty/' + getDateKey() + '/' + sid); }
+function qtyRef()          { return db.ref('qty/' + getDateKey()); }  // 총 확인용
+function storeQtyRef(sid)  { return db.ref('qty/' + getStoreDate(sid) + '/' + sid); }  // 점포용
 
 function safeKey(p) {
   return p.replace(/[.#$\[\]\/]/g, '_');
 }
 
+// 점포 탭 전용 날짜
+function getStoreDate(sid) { return storeDateOverride[sid] || todayLocal(); }
+
 function getQ(sid, p)    { return qty[sid]?.[safeKey(p)] ?? 0; }
+function getSQ(sid, p)   { return summaryQty[sid]?.[safeKey(p)] ?? 0; }  // 총 확인 전용
 function getDraft(sid, p){ return draft[sid]?.[safeKey(p)] ?? null; }
 function setDraft(sid, p, v) {
   if (!draft[sid]) draft[sid] = {};
@@ -530,20 +525,26 @@ function setDraft(sid, p, v) {
 }
 
 function fbSubmitStore(sid) {
-  // draft에 있는 변경분만 update() → 다른 품목 데이터 보존
+  // 현재 DOM input 전체 값으로 저장
+  // (수정버튼으로 일부 저장 후 draft 일부 비어있어도 전체 반영)
   const updates = {};
-  const d = draft[sid] || {};
 
-  Object.keys(d).forEach(k => {
-    const n = d[k] ?? 0;
-    // 0이면 null로 설정해서 해당 키 삭제, 양수면 업데이트
+  document.querySelectorAll(`.num-input[data-sid="${sid}"]`).forEach(inp => {
+    const k = safeKey(inp.getAttribute('data-prod'));
+    const n = parseInt(inp.value) || 0;
     updates[k] = n > 0 ? n : null;
   });
 
+  // DOM input이 없으면 (렌더 전) draft 기반으로 fallback
   if (Object.keys(updates).length === 0) {
-    // 변경사항 없으면 바로 resolve
-    return Promise.resolve();
+    const d = draft[sid] || {};
+    Object.keys(d).forEach(k => {
+      const n = d[k] ?? 0;
+      updates[k] = n > 0 ? n : null;
+    });
   }
+
+  if (Object.keys(updates).length === 0) return Promise.resolve();
   return storeQtyRef(sid).update(updates);
 }
 
@@ -560,60 +561,82 @@ db.ref('.info/connected').on('value', snap => {
 });
 
 // ══════════════════════════════════════════════
-//  qty 구독 — 총확인: 실시간 on() / 점포탭: 초기 once() 로드
+//  리스너 — 총 확인 / 점포 완전 분리
 // ══════════════════════════════════════════════
+// 총 확인 전용 리스너
+let summaryListener = null;
+let summaryListenerDate = null;
+
+// 점포 전용 리스너
 let qtyListener = null;
-let qtyListenerSid = null;   // 현재 리스너가 구독 중인 점포 ID
-let qtyListenerDate = null;  // 현재 리스너가 구독 중인 날짜
+let qtyListenerSid = null;
+let qtyListenerDate = null;
 let qtyLoaded = false;
 
-function subscribeQty() {
-  // 기존 리스너 해제
+// ── 총 확인 구독 (summaryQty에만 쓰고, qty 절대 건드리지 않음)
+function subscribeSummary() {
+  const dateKey = getDateKey();  // getSummaryDateKey() 기준으로 세팅된 값
+  // 같은 날짜 구독 중이면 스킵
+  if (summaryListener && summaryListenerDate === dateKey) {
+    updateSummaryTable();  // 현재 summaryQty로 즉시 렌더
+    return;
+  }
+  // 이전 리스너 해제
+  if (summaryListener) {
+    db.ref('qty/' + summaryListenerDate).off('value', summaryListener);
+    summaryListener = null;
+  }
+  summaryListenerDate = dateKey;
+  summaryQty = {};
+  summaryListener = db.ref('qty/' + dateKey).on('value', snap => {
+    summaryQty = snap.val() || {};  // qty 변수 절대 건드리지 않음
+    if (currentTab === '__summary__') updateSummaryTable();
+  });
+}
+
+// ── 점포 구독 (qty[sid]에만 쓰고, summaryQty 절대 건드리지 않음)
+function subscribeStore(sid) {
+  const dateKey = getStoreDate(sid);
+
+  // 같은 점포+날짜 리스너가 이미 살아있고 데이터도 있으면 → 즉시 렌더만
+  if (qtyListener && qtyListenerSid === sid && qtyListenerDate === dateKey && qty[sid]) {
+    renderMain();
+    return;
+  }
+
+  // 이전 리스너 해제 (다른 점포/날짜였거나 데이터 없을 때)
   if (qtyListener) {
-    // 이전 리스너가 점포용이면 점포 경로에서, 아니면 전체 경로에서 해제
-    if (qtyListenerSid) {
-      db.ref('qty/' + qtyListenerDate + '/' + qtyListenerSid).off('value', qtyListener);
-    } else {
-      db.ref('qty/' + qtyListenerDate).off('value', qtyListener);
-    }
+    db.ref('qty/' + qtyListenerDate + '/' + qtyListenerSid).off('value', qtyListener);
     qtyListener = null; qtyListenerSid = null; qtyListenerDate = null;
   }
 
-  if (currentTab === '__summary__') {
-    // 총확인: 날짜 전체 실시간 구독
-    const dateKey = getDateKey();
-    qtyListenerDate = dateKey; qtyListenerSid = null;
-    qtyListener = db.ref('qty/' + dateKey).on('value', snap => {
-      qty = snap.val() || {};
-      updateSummaryTable();
-    });
-  } else if (currentTab !== '__admin__') {
-    // 점포탭: 해당 점포 경로만 구독 → 데이터 양이 1/N으로 줄어 빠름
-    const sid = currentTab;
-    const dateKey = getDateKey();
-    qtyListenerDate = dateKey; qtyListenerSid = sid;
-    showStoreSkeleton(sid);
-    qtyLoaded = false;
-    qtyListener = db.ref('qty/' + dateKey + '/' + sid).on('value', snap => {
-      qty[sid] = snap.val() || {};
-      if (currentTab !== sid) return;
-      if (!qtyLoaded) {
-        // 첫 로드: 전체 렌더
-        qtyLoaded = true;
-        renderMain();
-      } else {
-        // 이후 변경: 입력 필드 값만 부분 업데이트
-        // ※ 포커스 중이거나 draft에 편집 중인 칸은 건드리지 않음 (입력값 보호)
-        document.querySelectorAll(`.num-input[data-sid="${sid}"]`).forEach(inp => {
-          const k = safeKey(inp.getAttribute('data-prod'));
-          const inDraft = draft[sid] && k in draft[sid];
-          if (document.activeElement === inp || inDraft) return;
-          const newVal = qty[sid]?.[k] ?? 0;
-          inp.value = newVal > 0 ? newVal : '';
-        });
-      }
-    });
-  }
+  qtyListenerSid = sid; qtyListenerDate = dateKey;
+  showStoreSkeleton(sid);
+  qtyLoaded = false;
+
+  qtyListener = db.ref('qty/' + dateKey + '/' + sid).on('value', snap => {
+    qty[sid] = snap.val() || {};  // summaryQty 절대 건드리지 않음
+    if (currentTab !== sid) return;
+    if (!qtyLoaded) {
+      qtyLoaded = true;
+      renderMain();
+    } else {
+      // 실시간 업데이트: 내 draft/포커스 칸 보호
+      document.querySelectorAll(`.num-input[data-sid="${sid}"]`).forEach(inp => {
+        const k = safeKey(inp.getAttribute('data-prod'));
+        if (document.activeElement === inp) return;
+        if (draft[sid] && k in draft[sid]) return;
+        const newVal = qty[sid]?.[k] ?? 0;
+        inp.value = newVal > 0 ? newVal : '';
+      });
+    }
+  });
+}
+
+// 하위 호환 (configListener 등에서 호출)
+function subscribeQty() {
+  if (currentTab === '__summary__') subscribeSummary();
+  else if (currentTab !== '__admin__') subscribeStore(currentTab);
 }
 
 function showStoreSkeleton(sid) {
@@ -656,7 +679,7 @@ function updateSummaryTable() {
     const p = row.getAttribute('data-prod');
     let total = 0;
     stores.forEach((s, i) => {
-      const q = getQ(s.id, p);
+      const q = getSQ(s.id, p);  // summaryQty 전용
       total += q;
       const cell = row.querySelector(`td[data-sid="${s.id}"]`);
       if (cell) {
@@ -758,7 +781,8 @@ function fbResetQtyByCategories(catList) {
       });
     });
   });
-  qtyRef().update(updates);
+  const _rd = summaryListenerDate || getDateKey();
+  db.ref('qty/' + _rd).update(updates);
 }
 
 // ══════════════════════════════════════════════
@@ -823,7 +847,14 @@ let masterProducts = {};
 let disabled = {};
 let hiddenCats = {};
 let currentTab = '__summary__';
-let qty = {};
+
+// ── 총 확인 전용 (getSummaryDateKey 기준, 점포 qty와 절대 혼합 안 됨)
+let summaryQty = {};
+
+// ── 점포 전용 (점포별 선택 날짜 기준)
+let qty = {};  // qty[sid] = { safeKey: n }
+let storeDateOverride = {};  // 점포별 선택 날짜 { sid: 'YYYY-MM-DD' }
+
 let draft = {};
 
 function isDisabled(sid, p) { return !!(disabled[sid] && disabled[sid][p]); }
@@ -843,12 +874,11 @@ function buildMasterFromProducts() {
 //  INIT — 점포 탭 기본 날짜는 오늘
 // ══════════════════════════════════════════════
 function init() {
-  // 총 확인 탭 기본값: 오후 4시 기준 자동 선택
   document.getElementById('globalDate').value = getSummaryDateKey();
   setHeaderSub();
   subscribeConfig(() => {
     buildTabs();
-    subscribeQty();
+    subscribeSummary();
     autoDeleteOldData();
   });
 }
@@ -885,10 +915,15 @@ function setHeaderSub() {
 }
 
 function onDateChange() {
-  qty = {};
-  draft = {};
+  if (currentTab !== '__summary__') return;
   setHeaderSub();
-  subscribeQty();
+  // summaryQty만 초기화, qty(점포) 불변
+  summaryQty = {};
+  if (summaryListener) {
+    db.ref('qty/' + summaryListenerDate).off('value', summaryListener);
+    summaryListener = null; summaryListenerDate = null;
+  }
+  subscribeSummary();
   renderMain();
 }
 
@@ -907,26 +942,32 @@ function buildTabs() {
 
 function switchTab(id) {
   currentTab = id;
+  const dateInput = document.getElementById('globalDate');
+
   if (id === '__summary__') {
-    // 총 확인 탭: 날짜를 강제로 바꾸지 않음
-    // → 점포에서 발주 제출(오늘) 후 총 확인으로 이동해도 날짜 그대로 유지
-    // → 최초 진입 기본값은 init()의 getSummaryDateKey() 에서만 결정 (오후4시 규칙)
+    // 총 확인: globalDate 표시, 4시 규칙 날짜
+    dateInput.style.display = '';
+    dateInput.value = getSummaryDateKey();
     setHeaderSub();
-    qty = {};
     buildTabs();
-    subscribeQty();      // 총확인: 실시간 구독
+    subscribeSummary();   // summaryQty만 건드림, qty 불변
     renderMain();
+
   } else if (id === '__admin__') {
+    dateInput.style.display = 'none';
     buildTabs();
     renderMain();
+
   } else {
-    // 점포 탭: 날짜 세팅 후 스켈레톤 → once() 로드
-    document.getElementById('globalDate').value = todayLocal();
-    setHeaderSub();
-    // 해당 점포 draft는 유지, qty만 초기화
-    qty = {};
+    // 점포: globalDate 숨김 (값 절대 변경 안 함)
+    dateInput.style.display = 'none';
+    if (!storeDateOverride[id]) storeDateOverride[id] = todayLocal();
+    const d = new Date();
+    const days = ['일','월','화','수','목','금','토'];
+    document.getElementById('headerSub').textContent =
+      `${d.getFullYear()}년 ${d.getMonth()+1}월 ${d.getDate()}일 (${days[d.getDay()]})`;
     buildTabs();
-    subscribeQty();      // 점포탭: once() 로드 → renderMain 자동 호출
+    subscribeStore(id);   // qty[id]만 건드림, summaryQty 불변
   }
 }
 
@@ -995,7 +1036,7 @@ function renderSummary() {
     if (hiddenCats[cat]) return;
     const catRows = [];
     (catProds[cat] || []).forEach(p => {
-      const qs = stores.map(s => getQ(s.id, p));
+      const qs = stores.map(s => getSQ(s.id, p));  // summaryQty 전용
       const total = qs.reduce((a,b)=>a+b,0);
       if (!summaryShowAll && total === 0) return;
       const allDisabled = stores.every(s => isDisabled(s.id, p));
@@ -1035,7 +1076,6 @@ function renderSummary() {
           <input type="checkbox" id="summaryShowAllChk" ${summaryShowAll?'checked':''} onchange="summaryShowAll=this.checked;renderMain()" style="width:14px;height:14px;cursor:pointer;accent-color:#3b5bdb">
           품목 전체 보기
         </label>
-        <button onclick="resetSummaryDate()" style="background:rgba(255,255,255,0.18);border:1px solid rgba(255,255,255,0.35);border-radius:20px;padding:5px 14px;font-size:11px;font-weight:700;color:#fff;cursor:pointer;white-space:nowrap">📅 기본 날짜로</button>
         <div class="live-badge"><span class="live-dot"></span>실시간</div>
       </div>
     </div>
@@ -1046,7 +1086,7 @@ function renderSummary() {
       </div>
       <div style="display:none;flex-wrap:wrap;gap:8px;padding:0 18px 14px 18px;">${resetButtons}</div>
     </div>
-    <div class="notice-bar">🔒 읽기 전용 · 점포 탭에서 <strong>발주 제출</strong> 후 바로 이 탭에 반영됩니다 · 기본날짜: 오전~오후3시=어제, 오후4시~=오늘 (직접 변경 가능)${summaryShowAll?' <strong>· 전체 품목 표시 중</strong>':''} <span id="scrollHint" style="display:none"> · 👈 좌우로 스크롤</span></div>
+    <div class="notice-bar">🔒 이 탭은 읽기 전용입니다. 수량 입력은 각 점포 탭 → <strong>발주 제출</strong> 버튼으로 반영하세요.${summaryShowAll?' <strong>· 전체 품목 표시 중</strong>':''} <span id="scrollHint" style="display:none"> · 👈 좌우로 스크롤</span></div>
     <div class="table-wrap">
       <table class="order-table">
         <thead>${thead}</thead>
@@ -1074,7 +1114,7 @@ function toggleCat(catRow) {
 function renderStore(sid) {
   const store = stores.find(s => s.id === sid);
   if (!store) return '<p style="padding:20px">점포를 찾을 수 없습니다.</p>';
-  const dateVal = document.getElementById('globalDate').value;
+  const dateVal = getStoreDate(sid);  // globalDate 완전 무관
   const sortedProds = getSortedStoreProds(sid);
 
   // 데이터 날짜 기준으로 출고분 라벨 결정
@@ -1115,6 +1155,9 @@ function renderStore(sid) {
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <span style="font-size:12px;color:var(--text-dim);font-weight:600">📅 ${dateVal}</span>
         <span style="font-size:12px;font-weight:800;color:${orderLabelColor};background:${orderLabelColor}18;border:1.5px solid ${orderLabelColor}55;border-radius:20px;padding:4px 12px">${orderLabel}</span>
+        <input type="date" class="date-input" value="${dateVal}"
+          onchange="setStoreDateDirect('${sid}', this.value)"
+          style="font-size:13px;font-weight:700;border-color:var(--accent)">
         <button class="btn btn-danger" onclick="clearDraft('${sid}')" style="min-height:36px">🗑 초기화</button>
       </div>
     </div>
@@ -1186,7 +1229,6 @@ function saveItem(btn) {
     if (n > 0) qty[sid][k] = n;
     else delete qty[sid][k];
     if (draft[sid]) delete draft[sid][k];
-
     modifiedItems.add(sid + '|' + k);
     btn.textContent = '완료 ✓';
     btn.className = 'btn-edit-item done';
@@ -1230,16 +1272,15 @@ function submitStore(sid) {
   if (btn) { btn.textContent = '⏳ 제출 중...'; btn.disabled = true; }
 
   fbSubmitStore(sid).then(() => {
-    // draft에 있던 항목만 qty에 반영 (전체 input 스캔 금지 — 다른 카테고리 데이터 삭제 방지)
+    // DOM 전체 input → qty[sid] 반영 + modifiedItems 추가 + draft 초기화
     if (!qty[sid]) qty[sid] = {};
-    const submitted = draft[sid] || {};
-    Object.keys(submitted).forEach(k => {
-      const n = submitted[k] ?? 0;
+    document.querySelectorAll(`.num-input[data-sid="${sid}"]`).forEach(inp => {
+      const k = safeKey(inp.getAttribute('data-prod'));
+      const n = parseInt(inp.value) || 0;
       if (n > 0) qty[sid][k] = n;
       else delete qty[sid][k];
     });
     draft[sid] = {};
-    // submit bar만 업데이트 (전체 renderMain 호출 불필요)
     const titleEl = document.getElementById('sbTitle');
     if (titleEl) titleEl.textContent = '✅ 제출 완료';
     if (btn) { btn.textContent = '📤 발주 제출'; btn.disabled = false; btn.style.opacity = '1'; }
@@ -1250,11 +1291,20 @@ function submitStore(sid) {
   });
 }
 
+function setStoreDateDirect(sid, dateStr) {
+  if (!dateStr || storeDateOverride[sid] === dateStr) return;
+  storeDateOverride[sid] = dateStr;
+  // qty/draft 초기화 안 함 → 입력한 수량 유지
+  // 새 날짜의 Firebase 데이터 로드 후 draft 없는 칸만 업데이트됨
+  subscribeStore(sid);
+}
+
 function clearDraft(sid) {
   const s = stores.find(s=>s.id===sid);
   if (!confirm(`${s.label}의 모든 수량을 초기화할까요?\n(제출된 수량도 삭제됩니다)`)) return;
   draft[sid] = {};
-  qtyRef().child(sid).remove();
+  delete qty[sid];
+  db.ref('qty/' + getStoreDate(sid) + '/' + sid).remove();
   renderMain();
   toast(`🗑 ${s.label} 초기화 완료`, 'success');
 }
@@ -1262,8 +1312,8 @@ function clearDraft(sid) {
 // 총 확인 탭에서 특정 점포 수량 초기화
 function resetStore(sid, label) {
   if (!confirm(`"${label}"의 모든 발주 수량을 초기화할까요?\n(제출된 수량이 삭제됩니다)`)) return;
-  draft[sid] = {};
-  qtyRef().child(sid).remove().then(() => {
+  const _d = summaryListenerDate || getDateKey();
+  db.ref('qty/' + _d + '/' + sid).remove().then(() => {
     toast(`🗑 ${label} 수량 초기화 완료`, 'success');
   }).catch(() => {
     toast('⚠️ 초기화 실패 — 네트워크를 확인해주세요', 'error');
@@ -1318,6 +1368,7 @@ function renderAdmin() {
               ondragend="onDragEnd()">
               <span class="drag-handle">⠿</span>
               <span class="drag-item-name" style="${hiddenCats[c]?'opacity:0.4;text-decoration:line-through;':''}">📂 ${c}</span>
+              <button onclick="renameMasterCat('${esc(c)}')" style="background:#e7f5ff;color:#1971c2;border:none;border-radius:6px;padding:2px 8px;font-size:11px;font-weight:700;cursor:pointer;margin-right:2px">✏️</button>
               <button onclick="toggleHiddenCat('${esc(c)}')" style="background:${hiddenCats[c]?'#ffe3e3':'#e8f5e9'};color:${hiddenCats[c]?'#e03131':'#2f9e44'};border:none;border-radius:6px;padding:2px 10px;font-size:11px;font-weight:700;cursor:pointer;margin-right:4px">${hiddenCats[c]?'숨김 🙈':'표시 👁'}</button>
               ${arr.length>1?`<span class="x" onclick="delMasterCat('${esc(c)}')">×</span>`:''}
             </div>`).join('') : '<span style="font-size:12px;color:var(--text-dim)">카테고리 없음</span>'}
@@ -1344,6 +1395,7 @@ function renderAdmin() {
               ondragend="onDragEnd()">
               <span class="drag-handle">⠿</span>
               <span class="drag-item-name">${p}</span>
+              <button onclick="renameMasterProd('${esc(selMasterCat)}',${i},'${esc(p)}')" style="background:#e7f5ff;color:#1971c2;border:none;border-radius:6px;padding:2px 8px;font-size:11px;font-weight:700;cursor:pointer;margin-right:2px">✏️</button>
               <span class="x" onclick="delMasterProd('${esc(selMasterCat)}',${i})">×</span>
             </div>`).join('') : '<span style="font-size:12px;color:var(--text-dim)">품목 없음</span>'}
         </div>
@@ -1500,6 +1552,27 @@ function toggleDisabled(sid, p, checked) {
   }
 }
 
+function renameMasterCat(oldCat) {
+  const newCat = prompt('카테고리 이름 수정', oldCat);
+  if (!newCat || newCat.trim() === oldCat) return;
+  const nc = newCat.trim();
+  if (!nc || masterProducts[nc]) { toast('⚠️ 이미 있는 카테고리입니다', 'error'); return; }
+  const reordered = {};
+  Object.keys(masterProducts).forEach(c => { reordered[c === oldCat ? nc : c] = masterProducts[c]; });
+  masterProducts = reordered;
+  if (hiddenCats[oldCat]) { hiddenCats[nc] = true; delete hiddenCats[oldCat]; }
+  renderMain();
+  toast(`✅ "${oldCat}" → "${nc}" (저장 버튼으로 확정)`, 'success');
+}
+function renameMasterProd(cat, idx, oldName) {
+  const newName = prompt('품목 이름 수정', oldName);
+  if (!newName || newName.trim() === oldName) return;
+  const nn = newName.trim();
+  if (!nn || masterProducts[cat].includes(nn)) { toast('⚠️ 이미 있는 품목입니다', 'error'); return; }
+  masterProducts[cat][idx] = nn;
+  renderMain();
+  toast(`✅ "${oldName}" → "${nn}" (저장 버튼으로 확정)`, 'success');
+}
 function addMasterCat() {
   const cat = document.getElementById('newMasterCatIn')?.value.trim();
   if (!cat) return;
