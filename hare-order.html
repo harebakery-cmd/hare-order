@@ -204,6 +204,10 @@ tr.cat-hidden { display: none; }
 .drag-handle { cursor: grab; color: #adb5bd; font-size: 16px; line-height: 1; flex-shrink: 0; padding: 0 2px; }
 .drag-handle:active { cursor: grabbing; }
 .drag-handle:hover { color: var(--accent); }
+@media (hover: none) and (pointer: coarse) {
+  .drag-handle { font-size: 20px; padding: 4px 8px; color: #868e96; min-width: 36px; text-align: center; }
+  .drag-hint { font-size: 12px; color: #7950f2; font-weight: 700; }
+}
 .drag-item-name { flex: 1; }
 .drag-item .x { cursor: pointer; color: var(--red); font-weight: 900; font-size: 15px; line-height: 1; flex-shrink: 0; }
 .drag-item .x:hover { opacity: 0.6; }
@@ -1357,7 +1361,7 @@ function renderAdmin() {
       </div>
 
       <div style="margin-bottom:16px">
-        <div class="drag-hint">☰ 카테고리 순서 드래그 변경</div>
+        <div class="drag-hint">☰ 카테고리 순서 드래그 변경 <span style="display:none" id="touchHint">· 모바일: ☰ 아이콘을 길게 누른 채 끌어주세요</span></div>
         <div class="drag-list" id="masterCatDragList">
           ${Object.keys(masterProducts).length ? Object.keys(masterProducts).map((c,i,arr)=>`
             <div class="drag-item" draggable="true"
@@ -1384,7 +1388,7 @@ function renderAdmin() {
           <span class="field-label">카테고리:</span>
           <select class="sel-input" id="aMasterCat" onchange="renderMain()">${masterCatOpts}</select>
         </div>
-        <div class="drag-hint">☰ 품목 순서 드래그 변경</div>
+        <div class="drag-hint">☰ 품목 순서 드래그 변경 <span id="touchHint2" style="display:none">· 모바일: ☰ 아이콘을 길게 누른 채 끌어주세요</span></div>
         <div class="drag-list" id="masterProdDragList">
           ${masterCatProds.length ? masterCatProds.map((p,i)=>`
             <div class="drag-item" draggable="true"
@@ -1529,6 +1533,135 @@ function onMasterProdDrop(e,targetIdx,cat) {
 }
 
 // ══════════════════════════════════════════════
+//  TOUCH DRAG — 모바일 터치 드래그 지원
+// ══════════════════════════════════════════════
+let _touchDragInitialized = false;
+
+function initTouchDrag() {
+  if (_touchDragInitialized) return;
+  _touchDragInitialized = true;
+
+  // 터치 기기면 힌트 텍스트 표시
+  const showHints = () => {
+    ['touchHint','touchHint2'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.style.display = 'inline';
+    });
+  };
+  // 설정 탭 진입 시마다 힌트 표시 (renderMain 후)
+  const _origRenderMain = renderMain;
+  // renderMain은 전역함수라 직접 후킹
+  document.addEventListener('touchstart', showHints, { once: true });
+
+  let dragEl = null;
+  let dragType = null;
+  let srcIdx = null;
+  let clone = null;
+  let offsetX = 0, offsetY = 0;
+  let lastTarget = null;
+
+  document.addEventListener('touchstart', function(e) {
+    const handle = e.target.closest('.drag-handle');
+    if (!handle) return;
+    const item = handle.closest('.drag-item');
+    if (!item) return;
+    const list = item.closest('#masterCatDragList, #masterProdDragList');
+    if (!list) return;
+
+    const items = [...list.querySelectorAll('.drag-item')];
+    srcIdx = items.indexOf(item);
+    dragEl = item;
+    dragType = list.id === 'masterCatDragList' ? 'masterCat' : 'masterProd';
+
+    const rect = item.getBoundingClientRect();
+    const touch = e.touches[0];
+    offsetX = touch.clientX - rect.left;
+    offsetY = touch.clientY - rect.top;
+
+    clone = item.cloneNode(true);
+    Object.assign(clone.style, {
+      position: 'fixed',
+      left: (touch.clientX - offsetX) + 'px',
+      top: (touch.clientY - offsetY) + 'px',
+      width: rect.width + 'px',
+      zIndex: '9999',
+      opacity: '0.88',
+      pointerEvents: 'none',
+      boxShadow: '0 8px 28px rgba(59,91,219,0.22)',
+      borderColor: 'var(--accent)',
+      background: 'var(--accent-light)',
+      margin: '0',
+      transition: 'none'
+    });
+    document.body.appendChild(clone);
+    item.style.opacity = '0.3';
+    item.style.borderStyle = 'dashed';
+    e.preventDefault();
+  }, { passive: false });
+
+  document.addEventListener('touchmove', function(e) {
+    if (!clone || !dragEl) return;
+    const touch = e.touches[0];
+    clone.style.left = (touch.clientX - offsetX) + 'px';
+    clone.style.top = (touch.clientY - offsetY) + 'px';
+
+    clone.style.display = 'none';
+    const elBelow = document.elementFromPoint(touch.clientX, touch.clientY);
+    clone.style.display = '';
+
+    document.querySelectorAll('.drag-item.drag-over').forEach(el => el.classList.remove('drag-over'));
+    const target = elBelow ? elBelow.closest('.drag-item') : null;
+    lastTarget = (target && target !== dragEl) ? target : null;
+    if (lastTarget) lastTarget.classList.add('drag-over');
+    e.preventDefault();
+  }, { passive: false });
+
+  document.addEventListener('touchend', function(e) {
+    if (!clone || !dragEl) return;
+
+    const touch = e.changedTouches[0];
+    clone.style.display = 'none';
+    const elBelow = document.elementFromPoint(touch.clientX, touch.clientY);
+    clone.remove(); clone = null;
+
+    document.querySelectorAll('.drag-item.drag-over').forEach(el => el.classList.remove('drag-over'));
+    dragEl.style.opacity = '';
+    dragEl.style.borderStyle = '';
+
+    const targetItem = (elBelow ? elBelow.closest('.drag-item') : null) || lastTarget;
+    if (targetItem && targetItem !== dragEl && srcIdx !== null) {
+      const list = targetItem.closest('#masterCatDragList, #masterProdDragList');
+      if (list) {
+        const items = [...list.querySelectorAll('.drag-item')];
+        const tgtIdx = items.indexOf(targetItem);
+        if (tgtIdx >= 0 && tgtIdx !== srcIdx) {
+          if (dragType === 'masterCat') {
+            const cats = Object.keys(masterProducts);
+            const [moved] = cats.splice(srcIdx, 1);
+            cats.splice(tgtIdx, 0, moved);
+            const reordered = {};
+            cats.forEach(c => { reordered[c] = masterProducts[c]; });
+            masterProducts = reordered;
+            renderMain();
+            toast('✅ 카테고리 순서 변경됨 (저장 버튼으로 확정)', 'success');
+          } else {
+            const selCat = document.getElementById('aMasterCat')?.value;
+            if (selCat && masterProducts[selCat]) {
+              const arr = masterProducts[selCat];
+              const [moved] = arr.splice(srcIdx, 1);
+              arr.splice(tgtIdx, 0, moved);
+              renderMain();
+              toast('✅ 품목 순서 변경됨 (저장 버튼으로 확정)', 'success');
+            }
+          }
+        }
+      }
+    }
+    dragEl = null; srcIdx = null; dragType = null; lastTarget = null;
+  }, { passive: false });
+}
+
+// ══════════════════════════════════════════════
 //  마스터 품목 관리
 // ══════════════════════════════════════════════
 function toggleDisabled(sid, p, checked) {
@@ -1646,6 +1779,7 @@ function showScrollHintIfMobile() {
 }
 
 init();
+initTouchDrag();
 </script>
 </body>
 </html>
