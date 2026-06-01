@@ -277,8 +277,19 @@ tr.cat-hidden { display: none; }
 .btn-edit-item:hover { background: var(--accent-light); border-color: var(--accent); }
 .btn-edit-item.saving { opacity: 0.5; pointer-events: none; }
 .btn-edit-item.done { background: #ebfbee; border-color: #8ce99a; color: #2f9e44; pointer-events: none; }
+.btn-hide-item {
+  width: 28px; height: 28px; border-radius: 7px; border: 1.5px solid var(--border);
+  background: var(--surface2); color: var(--text-dim); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 13px; flex-shrink: 0; transition: all 0.15s;
+}
+.btn-hide-item:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-light); }
+.btn-hide-item.hidden { background: #fff5f5; border-color: #ffc9c9; color: #e03131; }
+.item-name-wrap { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.item-hidden-name { color: #aaa; text-decoration: line-through; }
 @media (max-width: 600px) {
   .btn-edit-item { padding: 5px 8px; min-height: 36px; }
+  .btn-hide-item { width: 34px; height: 34px; }
 }
 
 /* 스켈레톤 로더 */
@@ -420,11 +431,11 @@ const db = firebase.database();
 //  날짜 키 — 모든 탭 date input 기준
 //
 //  [총 확인 탭 기본 날짜 규칙]
-//  발주 데이터는 항상 "입력한 날" 날짜로 저장됨
-//  출고는 다음날 → 총 확인은 "어제 발주 = 오늘 출고" 를 기본으로 표시
+//  발주 데이터는 항상 "출고/확인할 날짜" 기준으로 저장됨
+//  각 점포는 기본으로 내일 날짜 발주를 저장하고, 총 확인은 시간대에 맞는 출고일을 표시
 //
-//  오전 00:00 ~ 오후 3:59 → 어제 날짜 (어제 발주 = 오늘 출고분)
-//  오후 4:00 ~ 23:59      → 오늘 날짜 (오늘 발주 = 내일 출고분) ← 지금 막 입력 중인 것 확인용
+//  오전 00:00 ~ 오후 3:59 → 오늘 날짜 (오늘 출고/확인분)
+//  오후 4:00 ~ 23:59      → 내일 날짜 (점포가 입력한 내일 발주분 확인)
 // ══════════════════════════════════════════════
 // 로컬 날짜를 YYYY-MM-DD 문자열로 반환 (UTC 오류 방지)
 function localDateStr(date) {
@@ -445,11 +456,11 @@ function offsetDate(n) {
 function getSummaryDateKey() {
   const hour = new Date().getHours();
   if (hour < 16) {
-    // 오전~오후 3시: 어제 발주 = 오늘 출고분 보여주기
-    return offsetDate(-1);
-  } else {
-    // 오후 4시 이후: 오늘 발주 = 내일 출고분 입력 확인
+    // 오전~오후 3시: 오늘 출고/확인분 보여주기
     return todayLocal();
+  } else {
+    // 오후 4시 이후: 내일 발주분 확인
+    return offsetDate(+1);
   }
 }
 
@@ -462,49 +473,36 @@ function getDateKey() {
 //  발주분 / 출고분 라벨
 //
 //  [규칙]
-//  · 발주 데이터는 "입력한 날" 기준으로 저장됨
-//  · 출고는 그 다음날 → 데이터 날짜 +1일 = 출고일
+//  · 발주 데이터는 "출고/확인할 날짜" 기준으로 저장됨
 //
-//  예) 13일 데이터
-//    - 13일 오후 4시 이후 조회 → "내일 발주분" (출고일=14일)
-//    - 14일 조회              → "오늘 출고분" (출고일=오늘)
+//  예) 14일 데이터
+//    - 13일 오후 4시 이후 조회 → "내일 출고분"
+//    - 14일 조회              → "오늘 출고분"
 //    - 15일 이후 조회         → "X월X일 출고분 (과거)"
 //
-//  getSummaryDateKey()가 오후 4시 기준으로 날짜를 잡아주므로
-//  총 확인 탭은 항상 맞는 데이터를 가리키고 있음
+//  getSummaryDateKey()가 오후 4시 기준으로 오늘/내일 날짜를 잡아줌
 // ══════════════════════════════════════════════
 function getOrderLabel(targetDateStr) {
-  // targetDateStr: 발주 데이터가 저장된 날짜 (입력한 날)
-  // 출고일 = 발주 날짜 + 1일
-  //
-  // 예) 13일 발주 데이터
-  //   13일 오후 4시 이후 조회 → 출고일(14일) = 내일 → "내일 출고분"
-  //   14일 오전~오후 3시 조회 → 출고일(14일) = 오늘 → "오늘 출고분"
-  //   15일 이후 조회          → 출고일(14일) 지남  → "X월X일 출고분 (과거)"
+  // targetDateStr: 출고/확인할 날짜
 
   const today = todayLocal();
   const tomorrow = offsetDate(+1);
   const days = ['일','월','화','수','목','금','토'];
 
-  const dataDate = new Date(targetDateStr + 'T00:00:00');
-  const md = `${dataDate.getMonth()+1}월 ${dataDate.getDate()}일(${days[dataDate.getDay()]})`;
-
-  // 출고일 = 발주 날짜 + 1일 (로컬 기준)
   const shipDate = new Date(targetDateStr + 'T00:00:00');
-  shipDate.setDate(shipDate.getDate() + 1);
-  const shipStr = localDateStr(shipDate);
+  const shipStr = targetDateStr;
   const sm = `${shipDate.getMonth()+1}월 ${shipDate.getDate()}일(${days[shipDate.getDay()]})`;
 
   if (shipStr === today) {
-    return { text: `📦 오늘 출고분 · ${md} 발주`, color: '#2f9e44', bg: '#ebfbee', border: '#8ce99a' };
+    return { text: `📦 오늘 출고분 · ${sm}`, color: '#2f9e44', bg: '#ebfbee', border: '#8ce99a' };
   }
   if (shipStr === tomorrow) {
-    return { text: `📦 내일 출고분 · ${md} 발주`, color: '#7950f2', bg: '#f3f0ff', border: '#b197fc' };
+    return { text: `📦 내일 출고분 · ${sm}`, color: '#7950f2', bg: '#f3f0ff', border: '#b197fc' };
   }
   if (shipStr > today) {
-    return { text: `📦 ${sm} 출고분 · ${md} 발주`, color: '#1971c2', bg: '#e7f5ff', border: '#74c0fc' };
+    return { text: `📦 ${sm} 출고분`, color: '#1971c2', bg: '#e7f5ff', border: '#74c0fc' };
   }
-  return { text: `📦 ${sm} 출고분 (과거) · ${md} 발주`, color: '#868e96', bg: '#f8f9fa', border: '#dee2e6' };
+  return { text: `📦 ${sm} 출고분 (과거)`, color: '#868e96', bg: '#f8f9fa', border: '#dee2e6' };
 }
 
 function qtyRef()          { return db.ref('qty/' + getDateKey()); }  // 총 확인용
@@ -514,8 +512,8 @@ function safeKey(p) {
   return p.replace(/[.#$\[\]\/]/g, '_');
 }
 
-// 점포 탭 전용 날짜
-function getStoreDate(sid) { return storeDateOverride[sid] || todayLocal(); }
+// 점포 탭 전용 날짜: 기본은 내일 출고/확인분
+function getStoreDate(sid) { return storeDateOverride[sid] || offsetDate(+1); }
 
 function getQ(sid, p)    { return qty[sid]?.[safeKey(p)] ?? 0; }
 function getSQ(sid, p)   { return summaryQty[sid]?.[safeKey(p)] ?? 0; }  // 총 확인 전용
@@ -535,6 +533,10 @@ function fbSubmitStore(sid) {
 
   document.querySelectorAll(`.num-input[data-sid="${sid}"]`).forEach(inp => {
     const k = safeKey(inp.getAttribute('data-prod'));
+    if (inp.disabled) {
+      updates[k] = null;
+      return;
+    }
     const n = parseInt(inp.value) || 0;
     updates[k] = n > 0 ? n : null;
   });
@@ -858,8 +860,10 @@ let summaryQty = {};
 // ── 점포 전용 (점포별 선택 날짜 기준)
 let qty = {};  // qty[sid] = { safeKey: n }
 let storeDateOverride = {};  // 점포별 선택 날짜 { sid: 'YYYY-MM-DD' }
+let lastSubmittedDate = null;  // 발주 제출 직후 총 확인 탭에서 같은 날짜를 먼저 보여주기
 
 let draft = {};
+let storeHideDisabled = localStorage.getItem('storeHideDisabled') !== 'false';
 
 function isDisabled(sid, p) { return !!(disabled[sid] && disabled[sid][p]); }
 
@@ -920,6 +924,7 @@ function setHeaderSub() {
 
 function onDateChange() {
   if (currentTab !== '__summary__') return;
+  lastSubmittedDate = null;
   setHeaderSub();
   // summaryQty만 초기화, qty(점포) 불변
   summaryQty = {};
@@ -949,9 +954,10 @@ function switchTab(id) {
   const dateInput = document.getElementById('globalDate');
 
   if (id === '__summary__') {
-    // 총 확인: globalDate 표시, 4시 규칙 날짜
+    // 총 확인: 방금 제출한 날짜가 있으면 우선 표시하고, 없으면 4시 규칙 날짜
     dateInput.style.display = '';
-    dateInput.value = getSummaryDateKey();
+    dateInput.value = lastSubmittedDate || getSummaryDateKey();
+    lastSubmittedDate = null;
     setHeaderSub();
     buildTabs();
     subscribeSummary();   // summaryQty만 건드림, qty 불변
@@ -965,7 +971,7 @@ function switchTab(id) {
   } else {
     // 점포: globalDate 숨김 (값 절대 변경 안 함)
     dateInput.style.display = 'none';
-    if (!storeDateOverride[id]) storeDateOverride[id] = todayLocal();
+    if (!storeDateOverride[id]) storeDateOverride[id] = offsetDate(+1);
     const d = new Date();
     const days = ['일','월','화','수','목','금','토'];
     document.getElementById('headerSub').textContent =
@@ -996,8 +1002,7 @@ function getMasterOrder() {
 function getSortedStoreProds(sid) {
   const result = {};
   Object.entries(masterProducts).forEach(([cat, prods]) => {
-    const visible = prods.filter(p => !isDisabled(sid, p));
-    if (visible.length > 0) result[cat] = visible;
+    if (prods.length > 0) result[cat] = prods;
   });
   return result;
 }
@@ -1011,7 +1016,7 @@ function renderSummary() {
   const { catOrder, catProds } = getMasterOrder();
   const colCount = stores.length + 2;
 
-  // 날짜 라벨 (오후 4시 이후: 내일 발주표 / 오전~오후 3시: 오늘 발주표)
+  // 날짜 라벨 (오후 4시 이후: 내일 확인표 / 오전~오후 3시: 오늘 확인표)
   const selectedDate = getDateKey();
   const yDate = new Date(selectedDate + 'T00:00:00');
   const days = ['일','월','화','수','목','금','토'];
@@ -1072,7 +1077,7 @@ function renderSummary() {
     <div class="summary-card">
       <div>
         <h2>📋 총 발주 확인</h2>
-        <p>📅 ${yLabelKr} 발주 현황</p>
+        <p>📅 ${yLabelKr} 확인 현황</p>
       </div>
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <span style="font-size:13px;font-weight:900;color:${orderBadgeColor};background:${orderBadgeBg};border:2px solid ${orderBadgeBorder};border-radius:20px;padding:6px 16px;white-space:nowrap">${orderBadgeText}</span>
@@ -1090,7 +1095,7 @@ function renderSummary() {
       </div>
       <div style="display:none;flex-wrap:wrap;gap:8px;padding:0 18px 14px 18px;">${resetButtons}</div>
     </div>
-    <div class="notice-bar">🔒 이 탭은 읽기 전용입니다. 수량 입력은 각 점포 탭 → <strong>발주 제출</strong> 버튼으로 반영하세요.${summaryShowAll?' <strong>· 전체 품목 표시 중</strong>':''} <span id="scrollHint" style="display:none"> · 👈 좌우로 스크롤</span></div>
+    <div class="notice-bar">🔒 이 탭은 읽기 전용입니다. 각 점포의 내일 발주 수량은 오후 4시 이후 자동으로 이 확인표에 표시됩니다.${summaryShowAll?' <strong>· 전체 품목 표시 중</strong>':''} <span id="scrollHint" style="display:none"> · 👈 좌우로 스크롤</span></div>
     <div class="table-wrap">
       <table class="order-table">
         <thead>${thead}</thead>
@@ -1113,7 +1118,7 @@ function toggleCat(catRow) {
 }
 
 // ══════════════════════════════════════════════
-//  STORE INPUT — 점포 탭 (오늘 날짜)
+//  STORE INPUT — 점포 탭 (기본 내일 날짜)
 // ══════════════════════════════════════════════
 function renderStore(sid) {
   const store = stores.find(s => s.id === sid);
@@ -1130,22 +1135,33 @@ function renderStore(sid) {
 
   let rows = '';
   Object.entries(sortedProds).forEach(([cat, prods]) => {
-    rows += `<tr class="cat-row" onclick="toggleCat(this)"><td colspan="3">📂 ${cat} <span class="cat-toggle">▼</span></td></tr>`;
+    const catRows = [];
     prods.forEach(p => {
       const k = safeKey(p);
+      const hidden = isDisabled(sid, p);
+      if (hidden && storeHideDisabled) return;
       const q = (draft[sid] && k in draft[sid]) ? draft[sid][k] : (qty[sid]?.[k] ?? 0);
-      rows += `<tr>
-        <td>${p}</td>
+      catRows.push(`<tr class="${hidden ? 'row-disabled' : ''}">
+        <td>
+          <div class="item-name-wrap">
+            <span class="${hidden ? 'item-hidden-name' : ''}">${p}</span>
+            <button class="btn-hide-item ${hidden ? 'hidden' : ''}" title="${hidden ? '발주표에 다시 표시' : '이 점포 발주표에서 숨김'}" onclick="toggleStoreHidden('${sid}',${JSON.stringify(p)},${hidden ? 'false' : 'true'})">${hidden ? '🙈' : '👁'}</button>
+          </div>
+        </td>
         <td><input type="number" class="num-input" min="0" step="1"
           value="${q||''}" placeholder="0"
           data-sid="${sid}" data-prod="${escAttr(p)}"
           oninput="onQtyInput(this,'${sid}',${JSON.stringify(p)})"
-          onfocus="this.select()"></td>
+          onfocus="this.select()" ${hidden ? 'disabled' : ''}></td>
         <td style="padding:4px 6px;text-align:center">
-          <button class="btn-edit-item" data-sid="${sid}" data-prod="${escAttr(p)}" onclick="saveItem(this)">수정</button>
+          <button class="btn-edit-item" data-sid="${sid}" data-prod="${escAttr(p)}" onclick="saveItem(this)" ${hidden ? 'disabled style="opacity:0.35;pointer-events:none"' : ''}>수정</button>
         </td>
-      </tr>`;
+      </tr>`);
     });
+    if (catRows.length > 0) {
+      rows += `<tr class="cat-row" onclick="toggleCat(this)"><td colspan="3">📂 ${cat} <span class="cat-toggle">▼</span></td></tr>`;
+      rows += catRows.join('');
+    }
   });
 
   const pendingCount = countPending(sid);
@@ -1154,7 +1170,7 @@ function renderStore(sid) {
     <div class="store-card">
       <div>
         <div class="store-name">🏪 ${store.label}</div>
-        <div style="font-size:12px;color:var(--text-dim);margin-top:3px">수량 입력 후 아래 <strong>발주 제출</strong> 버튼을 눌러야 총 확인에 반영됩니다</div>
+        <div style="font-size:12px;color:var(--text-dim);margin-top:3px">내일 발주 수량 입력 후 아래 <strong>발주 제출</strong> 버튼을 누르면 저장됩니다</div>
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <span style="font-size:12px;color:var(--text-dim);font-weight:600">📅 ${dateVal}</span>
@@ -1162,10 +1178,14 @@ function renderStore(sid) {
         <input type="date" class="date-input" value="${dateVal}"
           onchange="setStoreDateDirect('${sid}', this.value)"
           style="font-size:13px;font-weight:700;border-color:var(--accent)">
+        <label style="display:flex;align-items:center;gap:6px;background:var(--surface2);border:1.5px solid var(--border);border-radius:20px;padding:7px 12px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">
+          <input type="checkbox" ${storeHideDisabled?'checked':''} onchange="setStoreHideDisabled(this.checked)" style="width:14px;height:14px;cursor:pointer;accent-color:#3b5bdb">
+          숨김 품목 안보기
+        </label>
         <button class="btn btn-danger" onclick="clearDraft('${sid}')" style="min-height:36px">🗑 초기화</button>
       </div>
     </div>
-    <div class="notice-bar" id="draftNotice">✏️ 수량 입력 후 품목별 <strong>수정</strong> 버튼으로 개별 저장하거나, 아래 <strong>발주 제출</strong> 버튼으로 전체 반영하세요.</div>
+    <div class="notice-bar" id="draftNotice">✏️ 수량 입력 후 품목별 <strong>수정</strong> 버튼으로 개별 저장하거나, 아래 <strong>발주 제출</strong> 버튼으로 전체 저장하세요. 숨김 품목을 다시 표시하려면 <strong>숨김 품목 안보기</strong> 체크를 해제하세요.</div>
     <div class="table-wrap">
       <table class="order-table store-table" style="min-width:280px">
         <thead><tr>
@@ -1276,10 +1296,15 @@ function submitStore(sid) {
   if (btn) { btn.textContent = '⏳ 제출 중...'; btn.disabled = true; }
 
   fbSubmitStore(sid).then(() => {
+    lastSubmittedDate = getStoreDate(sid);
     // DOM 전체 input → qty[sid] 반영 + modifiedItems 추가 + draft 초기화
     if (!qty[sid]) qty[sid] = {};
     document.querySelectorAll(`.num-input[data-sid="${sid}"]`).forEach(inp => {
       const k = safeKey(inp.getAttribute('data-prod'));
+      if (inp.disabled) {
+        delete qty[sid][k];
+        return;
+      }
       const n = parseInt(inp.value) || 0;
       if (n > 0) qty[sid][k] = n;
       else delete qty[sid][k];
@@ -1301,6 +1326,40 @@ function setStoreDateDirect(sid, dateStr) {
   // qty/draft 초기화 안 함 → 입력한 수량 유지
   // 새 날짜의 Firebase 데이터 로드 후 draft 없는 칸만 업데이트됨
   subscribeStore(sid);
+}
+
+function setStoreHideDisabled(checked) {
+  storeHideDisabled = checked;
+  localStorage.setItem('storeHideDisabled', checked ? 'true' : 'false');
+  renderMain();
+}
+
+function saveDisabledForStore(sid) {
+  const arr = Object.keys(disabled[sid] || {}).filter(p => disabled[sid][p]);
+  return db.ref('config/disabled/' + sid).set(arr);
+}
+
+function toggleStoreHidden(sid, p, hide) {
+  if (!disabled[sid]) disabled[sid] = {};
+  const k = safeKey(p);
+  if (hide) {
+    disabled[sid][p] = true;
+    if (draft[sid]) delete draft[sid][k];
+    if (qty[sid]) delete qty[sid][k];
+  } else {
+    delete disabled[sid][p];
+  }
+
+  const updates = {};
+  updates[k] = null;
+  const qtyPromise = hide ? storeQtyRef(sid).update(updates) : Promise.resolve();
+
+  Promise.all([saveDisabledForStore(sid), qtyPromise]).then(() => {
+    renderMain();
+    toast(hide ? `🙈 ${p} 숨김 처리 완료` : `👁 ${p} 다시 표시됨`, 'success');
+  }).catch(() => {
+    toast('⚠️ 숨김 설정 저장 실패 — 네트워크를 확인해주세요', 'error');
+  });
 }
 
 function clearDraft(sid) {
@@ -1332,16 +1391,11 @@ function renderAdmin() {
   const masterCatProds = masterProducts[selMasterCat] || [];
   const masterCatOpts = Object.keys(masterProducts).map(c=>`<option value="${c}" ${c===selMasterCat?'selected':''}>${c}</option>`).join('');
 
-  const selDisSid = document.getElementById('aDisStore')?.value || stores[0]?.id || '';
-  const selDisCat = document.getElementById('aDisCat')?.value || Object.keys(masterProducts)[0] || '';
-  const disCatProds = masterProducts[selDisCat] || [];
-  const disCatOpts = Object.keys(masterProducts).map(c=>`<option value="${c}" ${c===selDisCat?'selected':''}>${c}</option>`).join('');
-  const disStoreOpts = stores.map(s=>`<option value="${s.id}" ${s.id===selDisSid?'selected':''}>${s.label}</option>`).join('');
-
   const storeTags = stores.map((s,i)=>`
     <div class="tag">
       <span>${s.label}</span>
-      ${stores.length>1?`<span class="x" onclick="delStore(${i})">×</span>`:''}
+      <button onclick="renameStore(${i})" style="background:#e7f5ff;color:#1971c2;border:none;border-radius:6px;padding:1px 7px;font-size:11px;font-weight:700;cursor:pointer">✏️</button>
+      ${stores.length>1?`<button onclick="delStore(${i})" style="background:#fff5f5;color:#e03131;border:none;border-radius:6px;padding:1px 7px;font-size:11px;font-weight:900;cursor:pointer">×</button>`:''}
     </div>`).join('');
 
   return `
@@ -1410,26 +1464,6 @@ function renderAdmin() {
       </div>
     </div>
 
-    <div class="admin-section">
-      <h3>🚫 점포별 판매 안함 설정 <span style="font-size:10px;font-weight:400;color:var(--text-dim);margin-left:4px">체크된 품목은 해당 점포 탭에서 숨겨집니다</span></h3>
-      <div class="field-row">
-        <span class="field-label">점포:</span>
-        <select class="sel-input" id="aDisStore" onchange="renderMain()">${disStoreOpts}</select>
-        <span class="field-label">카테고리:</span>
-        <select class="sel-input" id="aDisCat" onchange="renderMain()">${disCatOpts}</select>
-      </div>
-      <div style="display:flex;flex-direction:column;gap:6px;margin-top:4px">
-        ${disCatProds.length ? disCatProds.map(p => {
-          const checked = isDisabled(selDisSid, p);
-          return `<label style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;cursor:pointer;border:1.5px solid ${checked?'#ffc9c9':'var(--border)'};background:${checked?'#fff5f5':'var(--surface2)'};transition:all 0.15s">
-            <input type="checkbox" ${checked?'checked':''} onchange="toggleDisabled('${selDisSid}','${esc(p)}',this.checked)" style="width:15px;height:15px;cursor:pointer;accent-color:#e03131">
-            <span style="font-size:13px;font-weight:${checked?'700':'500'};color:${checked?'#e03131':'var(--text)'};flex:1">${p}</span>
-            ${checked?'<span style="font-size:11px;color:#e03131;font-weight:700">판매 안함</span>':''}
-          </label>`;
-        }).join('') : '<span style="font-size:12px;color:var(--text-dim)">이 카테고리에 품목이 없습니다</span>'}
-      </div>
-    </div>
-
     <div class="admin-save-footer">
       <div class="save-desc">
         관리자 설정 완료 후 저장하세요
@@ -1446,7 +1480,7 @@ function renderAdmin() {
 function esc(s) { return s.replace(/'/g,"\\'"); }
 
 function addStore() {
-  const label = document.getElementById('newStoreIn').value.trim();
+  const label = document.getElementById('newStoreIn')?.value.trim();
   if (!label) return;
   if (stores.find(s=>s.label===label)) { toast('⚠️ 이미 존재하는 점포입니다','error'); return; }
   const id = 'st_'+Date.now();
@@ -1455,6 +1489,18 @@ function addStore() {
   document.getElementById('newStoreIn').value = '';
   buildTabs(); renderMain();
   toast(`✅ "${label}" 점포 추가됨`,'success');
+}
+
+function renameStore(i) {
+  const store = stores[i];
+  if (!store) return;
+  const label = prompt('점포명 수정', store.label)?.trim();
+  if (!label || label === store.label) return;
+  if (stores.find((s, idx)=>idx!==i && s.label===label)) { toast('⚠️ 이미 존재하는 점포명입니다','error'); return; }
+  const oldLabel = store.label;
+  store.label = label;
+  buildTabs(); renderMain();
+  toast(`✅ "${oldLabel}" → "${label}" 변경됨`,'success');
 }
 
 function delStore(i) {
@@ -1664,27 +1710,6 @@ function initTouchDrag() {
 // ══════════════════════════════════════════════
 //  마스터 품목 관리
 // ══════════════════════════════════════════════
-function toggleDisabled(sid, p, checked) {
-  if (!disabled[sid]) disabled[sid] = {};
-  if (checked) disabled[sid][p] = true;
-  else delete disabled[sid][p];
-  const lbl = event.target.closest('label');
-  if (lbl) {
-    lbl.style.border = checked ? '1.5px solid #ffc9c9' : '1.5px solid var(--border)';
-    lbl.style.background = checked ? '#fff5f5' : 'var(--surface2)';
-    const nameSpan = lbl.querySelector('span:nth-child(2)');
-    if (nameSpan) { nameSpan.style.color = checked?'#e03131':'var(--text)'; nameSpan.style.fontWeight = checked?'700':'500'; }
-    let badge = lbl.querySelector('.dis-badge');
-    if (checked && !badge) {
-      badge = document.createElement('span');
-      badge.className = 'dis-badge';
-      badge.style.cssText = 'font-size:11px;color:#e03131;font-weight:700';
-      badge.textContent = '판매 안함';
-      lbl.appendChild(badge);
-    } else if (!checked && badge) badge.remove();
-  }
-}
-
 function renameMasterCat(oldCat) {
   const newCat = prompt('카테고리 이름 수정', oldCat);
   if (!newCat || newCat.trim() === oldCat) return;
