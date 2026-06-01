@@ -1110,7 +1110,13 @@ function renderSummary() {
   `;
 }
 
-function escAttr(s) { return s.replace(/"/g, '&quot;'); }
+function escAttr(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
 
 function toggleCat(catRow) {
   catRow.classList.toggle('collapsed');
@@ -1150,13 +1156,13 @@ function renderStore(sid) {
         <td>
           <div class="item-name-wrap">
             <span class="${hidden ? 'item-hidden-name' : ''}">${p}</span>
-            <button class="btn-hide-item ${hidden ? 'hidden' : ''}" title="${hidden ? '발주표에 다시 표시' : '이 점포 발주표에서 숨김'}" onclick="toggleStoreHidden('${sid}',${JSON.stringify(p)},${hidden ? 'false' : 'true'})">${hidden ? '🙈' : '👁'}</button>
+            <button class="btn-hide-item ${hidden ? 'hidden' : ''}" title="${hidden ? '발주표에 다시 표시' : '이 점포 발주표에서 숨김'}" data-sid="${sid}" data-prod="${escAttr(p)}" data-hide="${hidden ? 'false' : 'true'}" onclick="toggleStoreHiddenFromButton(this)">${hidden ? '🙈' : '👁'}</button>
           </div>
         </td>
         <td><input type="number" class="num-input" min="0" step="1"
           value="${q||''}" placeholder="0"
           data-sid="${sid}" data-prod="${escAttr(p)}"
-          oninput="onQtyInput(this,'${sid}',${JSON.stringify(p)})"
+          oninput="onQtyInput(this,this.dataset.sid,this.dataset.prod)"
           onfocus="this.select()" ${hidden ? 'disabled' : ''}></td>
         <td style="padding:4px 6px;text-align:center">
           <button class="btn-edit-item" data-sid="${sid}" data-prod="${escAttr(p)}" onclick="saveItem(this)" ${hidden ? 'disabled style="opacity:0.35;pointer-events:none"' : ''}>수정</button>
@@ -1342,6 +1348,13 @@ function setStoreHideDisabled(checked) {
 function saveDisabledForStore(sid) {
   const arr = Object.keys(disabled[sid] || {}).filter(p => disabled[sid][p]);
   return db.ref('config/disabled/' + sid).set(arr);
+}
+
+function toggleStoreHiddenFromButton(btn) {
+  const sid = btn.dataset.sid;
+  const p = btn.dataset.prod;
+  const hide = btn.dataset.hide === 'true';
+  toggleStoreHidden(sid, p, hide);
 }
 
 function toggleStoreHidden(sid, p, hide) {
