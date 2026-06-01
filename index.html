@@ -431,11 +431,11 @@ const db = firebase.database();
 //  날짜 키 — 모든 탭 date input 기준
 //
 //  [총 확인 탭 기본 날짜 규칙]
-//  발주 데이터는 항상 "출고/확인할 날짜" 기준으로 저장됨
-//  각 점포는 기본으로 내일 날짜 발주를 저장하고, 총 확인은 시간대에 맞는 출고일을 표시
+//  발주 데이터는 항상 "입력한 날" 날짜로 저장됨
+//  각 점포는 오늘 날짜로 내일 발주를 입력하고, 총 확인은 시간대에 맞는 발주일을 표시
 //
-//  오전 00:00 ~ 오후 3:59 → 오늘 날짜 (오늘 출고/확인분)
-//  오후 4:00 ~ 23:59      → 내일 날짜 (점포가 입력한 내일 발주분 확인)
+//  오전 00:00 ~ 오후 3:59 → 어제 날짜 (어제 발주 = 오늘 확인분)
+//  오후 4:00 ~ 23:59      → 오늘 날짜 (오늘 입력한 내일 발주 확인)
 // ══════════════════════════════════════════════
 // 로컬 날짜를 YYYY-MM-DD 문자열로 반환 (UTC 오류 방지)
 function localDateStr(date) {
@@ -456,11 +456,11 @@ function offsetDate(n) {
 function getSummaryDateKey() {
   const hour = new Date().getHours();
   if (hour < 16) {
-    // 오전~오후 3시: 오늘 출고/확인분 보여주기
-    return todayLocal();
+    // 오전~오후 3시: 어제 발주 = 오늘 확인분 보여주기
+    return offsetDate(-1);
   } else {
-    // 오후 4시 이후: 내일 발주분 확인
-    return offsetDate(+1);
+    // 오후 4시 이후: 오늘 입력한 내일 발주 확인
+    return todayLocal();
   }
 }
 
@@ -473,36 +473,41 @@ function getDateKey() {
 //  발주분 / 출고분 라벨
 //
 //  [규칙]
-//  · 발주 데이터는 "출고/확인할 날짜" 기준으로 저장됨
+//  · 발주 데이터는 "입력한 날" 기준으로 저장됨
+//  · 확인/사용일은 그 다음날 → 데이터 날짜 +1일
 //
-//  예) 14일 데이터
-//    - 13일 오후 4시 이후 조회 → "내일 출고분"
-//    - 14일 조회              → "오늘 출고분"
-//    - 15일 이후 조회         → "X월X일 출고분 (과거)"
+//  예) 13일 데이터
+//    - 13일 오후 4시 이후 조회 → "내일 발주"
+//    - 14일 조회              → "오늘 확인분"
+//    - 15일 이후 조회         → "X월X일 확인분 (과거)"
 //
-//  getSummaryDateKey()가 오후 4시 기준으로 오늘/내일 날짜를 잡아줌
+//  getSummaryDateKey()가 오후 4시 기준으로 어제/오늘 날짜를 잡아줌
 // ══════════════════════════════════════════════
 function getOrderLabel(targetDateStr) {
-  // targetDateStr: 출고/확인할 날짜
+  // targetDateStr: 발주 데이터가 저장된 날짜 (입력한 날)
 
   const today = todayLocal();
   const tomorrow = offsetDate(+1);
   const days = ['일','월','화','수','목','금','토'];
 
+  const dataDate = new Date(targetDateStr + 'T00:00:00');
+  const md = `${dataDate.getMonth()+1}월 ${dataDate.getDate()}일(${days[dataDate.getDay()]})`;
+
   const shipDate = new Date(targetDateStr + 'T00:00:00');
-  const shipStr = targetDateStr;
+  shipDate.setDate(shipDate.getDate() + 1);
+  const shipStr = localDateStr(shipDate);
   const sm = `${shipDate.getMonth()+1}월 ${shipDate.getDate()}일(${days[shipDate.getDay()]})`;
 
   if (shipStr === today) {
-    return { text: `📦 오늘 출고분 · ${sm}`, color: '#2f9e44', bg: '#ebfbee', border: '#8ce99a' };
+    return { text: `📦 오늘 확인분 · ${md} 발주`, color: '#2f9e44', bg: '#ebfbee', border: '#8ce99a' };
   }
   if (shipStr === tomorrow) {
-    return { text: `📦 내일 출고분 · ${sm}`, color: '#7950f2', bg: '#f3f0ff', border: '#b197fc' };
+    return { text: `📦 내일 발주 · ${md} 작성`, color: '#7950f2', bg: '#f3f0ff', border: '#b197fc' };
   }
   if (shipStr > today) {
-    return { text: `📦 ${sm} 출고분`, color: '#1971c2', bg: '#e7f5ff', border: '#74c0fc' };
+    return { text: `📦 ${sm} 확인분 · ${md} 발주`, color: '#1971c2', bg: '#e7f5ff', border: '#74c0fc' };
   }
-  return { text: `📦 ${sm} 출고분 (과거)`, color: '#868e96', bg: '#f8f9fa', border: '#dee2e6' };
+  return { text: `📦 ${sm} 확인분 (과거) · ${md} 발주`, color: '#868e96', bg: '#f8f9fa', border: '#dee2e6' };
 }
 
 function qtyRef()          { return db.ref('qty/' + getDateKey()); }  // 총 확인용
@@ -512,8 +517,8 @@ function safeKey(p) {
   return p.replace(/[.#$\[\]\/]/g, '_');
 }
 
-// 점포 탭 전용 날짜: 기본은 내일 출고/확인분
-function getStoreDate(sid) { return storeDateOverride[sid] || offsetDate(+1); }
+// 점포 탭 전용 날짜: 기본은 오늘 입력일
+function getStoreDate(sid) { return storeDateOverride[sid] || todayLocal(); }
 
 function getQ(sid, p)    { return qty[sid]?.[safeKey(p)] ?? 0; }
 function getSQ(sid, p)   { return summaryQty[sid]?.[safeKey(p)] ?? 0; }  // 총 확인 전용
@@ -971,7 +976,7 @@ function switchTab(id) {
   } else {
     // 점포: globalDate 숨김 (값 절대 변경 안 함)
     dateInput.style.display = 'none';
-    if (!storeDateOverride[id]) storeDateOverride[id] = offsetDate(+1);
+    if (!storeDateOverride[id]) storeDateOverride[id] = todayLocal();
     const d = new Date();
     const days = ['일','월','화','수','목','금','토'];
     document.getElementById('headerSub').textContent =
@@ -1095,7 +1100,7 @@ function renderSummary() {
       </div>
       <div style="display:none;flex-wrap:wrap;gap:8px;padding:0 18px 14px 18px;">${resetButtons}</div>
     </div>
-    <div class="notice-bar">🔒 이 탭은 읽기 전용입니다. 각 점포의 내일 발주 수량은 오후 4시 이후 자동으로 이 확인표에 표시됩니다.${summaryShowAll?' <strong>· 전체 품목 표시 중</strong>':''} <span id="scrollHint" style="display:none"> · 👈 좌우로 스크롤</span></div>
+    <div class="notice-bar">🔒 이 탭은 읽기 전용입니다. 각 점포가 오늘 작성한 내일 발주는 오후 4시 이후 자동으로 이 확인표에 표시됩니다.${summaryShowAll?' <strong>· 전체 품목 표시 중</strong>':''} <span id="scrollHint" style="display:none"> · 👈 좌우로 스크롤</span></div>
     <div class="table-wrap">
       <table class="order-table">
         <thead>${thead}</thead>
@@ -1118,7 +1123,7 @@ function toggleCat(catRow) {
 }
 
 // ══════════════════════════════════════════════
-//  STORE INPUT — 점포 탭 (기본 내일 날짜)
+//  STORE INPUT — 점포 탭 (기본 오늘 날짜)
 // ══════════════════════════════════════════════
 function renderStore(sid) {
   const store = stores.find(s => s.id === sid);
