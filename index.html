@@ -428,14 +428,13 @@ firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
 
 // ══════════════════════════════════════════════
-//  날짜 키 — 모든 탭 date input 기준
+//  날짜 키 — 생산/확인 기준일
 //
-//  [총 확인 탭 기본 날짜 규칙]
-//  발주 데이터는 항상 "입력한 날" 날짜로 저장됨
-//  각 점포는 오늘 날짜로 내일 발주를 입력하고, 총 확인은 시간대에 맞는 발주일을 표시
+//  발주 데이터는 "입력한 날짜"가 아니라 "생산 기준일"로 저장됨
+//  전날 오후 4시 ~ 당일 오후 3:59까지 같은 생산 기준일을 사용
 //
-//  오전 00:00 ~ 오후 3:59 → 어제 날짜 (어제 발주 = 오늘 확인분)
-//  오후 4:00 ~ 23:59      → 오늘 날짜 (오늘 입력한 내일 발주 확인)
+//  오전 00:00 ~ 오후 3:59 → 오늘 생산분
+//  오후 4:00 ~ 23:59      → 내일 생산분
 // ══════════════════════════════════════════════
 // 로컬 날짜를 YYYY-MM-DD 문자열로 반환 (UTC 오류 방지)
 function localDateStr(date) {
@@ -456,58 +455,53 @@ function offsetDate(n) {
 function getSummaryDateKey() {
   const hour = new Date().getHours();
   if (hour < 16) {
-    // 오전~오후 3시: 어제 발주 = 오늘 확인분 보여주기
-    return offsetDate(-1);
-  } else {
-    // 오후 4시 이후: 오늘 입력한 내일 발주 확인
+    // 자정~오후 3시: 오늘 생산분 확인/수정
     return todayLocal();
+  } else {
+    // 오후 4시 이후: 내일 생산분 입력 시작
+    return offsetDate(+1);
   }
 }
 
 function getDateKey() {
   // 달력 선택값 항상 반영 (총 확인 탭 포함)
-  return document.getElementById('globalDate')?.value || todayLocal();
+  return document.getElementById('globalDate')?.value || getSummaryDateKey();
 }
 
 // ══════════════════════════════════════════════
-//  발주분 / 출고분 라벨
+//  생산 기준일 라벨
 //
 //  [규칙]
-//  · 발주 데이터는 "입력한 날" 기준으로 저장됨
-//  · 확인/사용일은 그 다음날 → 데이터 날짜 +1일
+//  · 발주 데이터는 생산 기준일로 저장됨
+//  · 전날 오후 4시 ~ 당일 오후 3:59까지 같은 생산 기준일을 사용
 //
-//  예) 13일 데이터
-//    - 13일 오후 4시 이후 조회 → "내일 발주"
-//    - 14일 조회              → "오늘 확인분"
-//    - 15일 이후 조회         → "X월X일 확인분 (과거)"
-//
-//  getSummaryDateKey()가 오후 4시 기준으로 어제/오늘 날짜를 잡아줌
+//  예) 7월 3일 오후 4시 입력, 7월 4일 새벽 수정, 7월 4일 오전 확인
+//      → 모두 7월 4일 생산분
 // ══════════════════════════════════════════════
 function getOrderLabel(targetDateStr) {
-  // targetDateStr: 발주 데이터가 저장된 날짜 (입력한 날)
+  // targetDateStr: 생산/확인 기준일
 
   const today = todayLocal();
   const tomorrow = offsetDate(+1);
   const days = ['일','월','화','수','목','금','토'];
 
-  const dataDate = new Date(targetDateStr + 'T00:00:00');
-  const md = `${dataDate.getMonth()+1}월 ${dataDate.getDate()}일(${days[dataDate.getDay()]})`;
+  const prodDate = new Date(targetDateStr + 'T00:00:00');
+  const pm = `${prodDate.getMonth()+1}월 ${prodDate.getDate()}일(${days[prodDate.getDay()]})`;
 
-  const shipDate = new Date(targetDateStr + 'T00:00:00');
-  shipDate.setDate(shipDate.getDate() + 1);
-  const shipStr = localDateStr(shipDate);
-  const sm = `${shipDate.getMonth()+1}월 ${shipDate.getDate()}일(${days[shipDate.getDay()]})`;
+  const inputStart = new Date(targetDateStr + 'T00:00:00');
+  inputStart.setDate(inputStart.getDate() - 1);
+  const inputRange = `${inputStart.getMonth()+1}/${inputStart.getDate()} 오후~${prodDate.getMonth()+1}/${prodDate.getDate()} 오전`;
 
-  if (shipStr === today) {
-    return { text: `📦 오늘 확인분 · ${md} 발주`, color: '#2f9e44', bg: '#ebfbee', border: '#8ce99a' };
+  if (targetDateStr === today) {
+    return { text: `📦 오늘 생산분 · ${pm}`, detail: inputRange, color: '#2f9e44', bg: '#ebfbee', border: '#8ce99a' };
   }
-  if (shipStr === tomorrow) {
-    return { text: `📦 내일 발주 · ${md} 작성`, color: '#7950f2', bg: '#f3f0ff', border: '#b197fc' };
+  if (targetDateStr === tomorrow) {
+    return { text: `📦 내일 생산분 · ${pm}`, detail: inputRange, color: '#7950f2', bg: '#f3f0ff', border: '#b197fc' };
   }
-  if (shipStr > today) {
-    return { text: `📦 ${sm} 확인분 · ${md} 발주`, color: '#1971c2', bg: '#e7f5ff', border: '#74c0fc' };
+  if (targetDateStr > today) {
+    return { text: `📦 ${pm} 생산분`, detail: inputRange, color: '#1971c2', bg: '#e7f5ff', border: '#74c0fc' };
   }
-  return { text: `📦 ${sm} 확인분 (과거) · ${md} 발주`, color: '#868e96', bg: '#f8f9fa', border: '#dee2e6' };
+  return { text: `📦 ${pm} 생산분 (과거)`, detail: inputRange, color: '#868e96', bg: '#f8f9fa', border: '#dee2e6' };
 }
 
 function qtyRef()          { return db.ref('qty/' + getDateKey()); }  // 총 확인용
@@ -517,8 +511,8 @@ function safeKey(p) {
   return p.replace(/[.#$\[\]\/]/g, '_');
 }
 
-// 점포 탭 전용 날짜: 기본은 오늘 입력일
-function getStoreDate(sid) { return storeDateOverride[sid] || todayLocal(); }
+// 점포 탭 전용 날짜: 기본은 생산 기준일
+function getStoreDate(sid) { return storeDateOverride[sid] || getSummaryDateKey(); }
 
 function getQ(sid, p)    { return qty[sid]?.[safeKey(p)] ?? 0; }
 function getSQ(sid, p)   { return summaryQty[sid]?.[safeKey(p)] ?? 0; }  // 총 확인 전용
@@ -586,7 +580,7 @@ let qtyLoaded = false;
 
 // ── 총 확인 구독 (summaryQty에만 쓰고, qty 절대 건드리지 않음)
 function subscribeSummary() {
-  const dateKey = getDateKey();  // getSummaryDateKey() 기준으로 세팅된 값
+  const dateKey = getDateKey();  // 생산 기준일
   // 같은 날짜 구독 중이면 스킵
   if (summaryListener && summaryListenerDate === dateKey) {
     updateSummaryTable();  // 현재 summaryQty로 즉시 렌더
@@ -884,7 +878,7 @@ function buildMasterFromProducts() {
 }
 
 // ══════════════════════════════════════════════
-//  INIT — 점포 탭 기본 날짜는 오늘
+//  INIT — 모든 탭 기본 날짜는 생산 기준일
 // ══════════════════════════════════════════════
 function init() {
   document.getElementById('globalDate').value = getSummaryDateKey();
@@ -921,10 +915,15 @@ function autoDeleteOldData() {
 
 function setHeaderSub() {
   const v = document.getElementById('globalDate').value;
+  setHeaderProductionDate(v);
+}
+
+function setHeaderProductionDate(dateStr) {
+  const v = dateStr || getSummaryDateKey();
   const d = new Date(v + 'T00:00:00');
   const days = ['일','월','화','수','목','금','토'];
   document.getElementById('headerSub').textContent =
-    `${d.getFullYear()}년 ${d.getMonth()+1}월 ${d.getDate()}일 (${days[d.getDay()]})`;
+    `${d.getFullYear()}년 ${d.getMonth()+1}월 ${d.getDate()}일 (${days[d.getDay()]}) 생산분`;
 }
 
 function onDateChange() {
@@ -959,7 +958,7 @@ function switchTab(id) {
   const dateInput = document.getElementById('globalDate');
 
   if (id === '__summary__') {
-    // 총 확인: 방금 제출한 날짜가 있으면 우선 표시하고, 없으면 4시 규칙 날짜
+    // 총 확인: 방금 제출한 생산 기준일이 있으면 우선 표시
     dateInput.style.display = '';
     dateInput.value = lastSubmittedDate || getSummaryDateKey();
     lastSubmittedDate = null;
@@ -974,13 +973,9 @@ function switchTab(id) {
     renderMain();
 
   } else {
-    // 점포: globalDate 숨김 (값 절대 변경 안 함)
+    // 점포: globalDate 숨김, 생산 기준일은 점포 탭 안에서 표시
     dateInput.style.display = 'none';
-    if (!storeDateOverride[id]) storeDateOverride[id] = todayLocal();
-    const d = new Date();
-    const days = ['일','월','화','수','목','금','토'];
-    document.getElementById('headerSub').textContent =
-      `${d.getFullYear()}년 ${d.getMonth()+1}월 ${d.getDate()}일 (${days[d.getDay()]})`;
+    setHeaderProductionDate(getStoreDate(id));
     buildTabs();
     subscribeStore(id);   // qty[id]만 건드림, summaryQty 불변
   }
@@ -1013,7 +1008,7 @@ function getSortedStoreProds(sid) {
 }
 
 // ══════════════════════════════════════════════
-//  SUMMARY — 총 확인 탭 (항상 어제 날짜)
+//  SUMMARY — 총 확인 탭 (생산 기준일)
 // ══════════════════════════════════════════════
 let summaryShowAll = true;
 
@@ -1021,16 +1016,16 @@ function renderSummary() {
   const { catOrder, catProds } = getMasterOrder();
   const colCount = stores.length + 2;
 
-  // 날짜 라벨 (오후 4시 이후: 내일 확인표 / 오전~오후 3시: 오늘 확인표)
+  // 날짜 라벨: 생산 기준일
   const selectedDate = getDateKey();
   const yDate = new Date(selectedDate + 'T00:00:00');
   const days = ['일','월','화','수','목','금','토'];
-  const isPM4 = new Date().getHours() >= 16;
   const yLabelKr = `${yDate.getMonth()+1}월 ${yDate.getDate()}일 (${days[yDate.getDay()]})`;
 
-  // 데이터 날짜 기준으로 출고분 라벨 결정
+  // 생산 기준일 라벨 결정
   const _sol = getOrderLabel(selectedDate);
   const orderBadgeText = _sol.text;
+  const orderBadgeDetail = _sol.detail;
   const orderBadgeColor = _sol.color;
   const orderBadgeBg = _sol.bg;
   const orderBadgeBorder = _sol.border;
@@ -1081,11 +1076,12 @@ function renderSummary() {
   return `
     <div class="summary-card">
       <div>
-        <h2>📋 총 발주 확인</h2>
-        <p>📅 ${yLabelKr} 확인 현황</p>
+        <h2>📋 생산·배송·포장 확인용</h2>
+        <p>📅 ${yLabelKr} 생산분 · 전날 오후~당일 오전 입력분</p>
       </div>
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <span style="font-size:13px;font-weight:900;color:${orderBadgeColor};background:${orderBadgeBg};border:2px solid ${orderBadgeBorder};border-radius:20px;padding:6px 16px;white-space:nowrap">${orderBadgeText}</span>
+        <span style="font-size:11px;font-weight:700;color:rgba(255,255,255,0.82);white-space:nowrap">입력범위 ${orderBadgeDetail}</span>
         <label style="display:flex;align-items:center;gap:7px;cursor:pointer;background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.3);border-radius:20px;padding:6px 14px;font-size:12px;font-weight:700;white-space:nowrap;color:#fff">
           <input type="checkbox" id="summaryShowAllChk" ${summaryShowAll?'checked':''} onchange="summaryShowAll=this.checked;renderMain()" style="width:14px;height:14px;cursor:pointer;accent-color:#3b5bdb">
           품목 전체 보기
@@ -1100,7 +1096,7 @@ function renderSummary() {
       </div>
       <div style="display:none;flex-wrap:wrap;gap:8px;padding:0 18px 14px 18px;">${resetButtons}</div>
     </div>
-    <div class="notice-bar">🔒 이 탭은 읽기 전용입니다. 각 점포가 오늘 작성한 내일 발주는 오후 4시 이후 자동으로 이 확인표에 표시됩니다.${summaryShowAll?' <strong>· 전체 품목 표시 중</strong>':''} <span id="scrollHint" style="display:none"> · 👈 좌우로 스크롤</span></div>
+    <div class="notice-bar">🔒 이 탭은 읽기 전용입니다. 생산 직원은 전날 오후~당일 오전 입력분을, 배송·포장팀은 당일 오전~오후 4시까지 같은 생산 기준일 자료를 확인합니다.${summaryShowAll?' <strong>· 전체 품목 표시 중</strong>':''} <span id="scrollHint" style="display:none"> · 👈 좌우로 스크롤</span></div>
     <div class="table-wrap">
       <table class="order-table">
         <thead>${thead}</thead>
@@ -1129,17 +1125,18 @@ function toggleCat(catRow) {
 }
 
 // ══════════════════════════════════════════════
-//  STORE INPUT — 점포 탭 (기본 오늘 날짜)
+//  STORE INPUT — 점포 탭 (생산 기준일)
 // ══════════════════════════════════════════════
 function renderStore(sid) {
   const store = stores.find(s => s.id === sid);
   if (!store) return '<p style="padding:20px">점포를 찾을 수 없습니다.</p>';
-  const dateVal = getStoreDate(sid);  // globalDate 완전 무관
+  const dateVal = getStoreDate(sid);  // 생산 기준일
   const sortedProds = getSortedStoreProds(sid);
 
-  // 데이터 날짜 기준으로 출고분 라벨 결정
+  // 생산 기준일 라벨 결정
   const _ol = getOrderLabel(dateVal);
   const orderLabel = _ol.text;
+  const orderDetail = _ol.detail;
   const orderLabelColor = _ol.color;
 
   if (!draft[sid]) draft[sid] = {};
@@ -1181,11 +1178,12 @@ function renderStore(sid) {
     <div class="store-card">
       <div>
         <div class="store-name">🏪 ${store.label}</div>
-        <div style="font-size:12px;color:var(--text-dim);margin-top:3px">내일 발주 수량 입력 후 아래 <strong>발주 제출</strong> 버튼을 누르면 저장됩니다</div>
+        <div style="font-size:12px;color:var(--text-dim);margin-top:3px">생산 기준일 수량 입력 후 아래 <strong>발주 제출</strong> 버튼을 누르면 저장됩니다</div>
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <span style="font-size:12px;color:var(--text-dim);font-weight:600">📅 ${dateVal}</span>
+        <span style="font-size:12px;color:var(--text-dim);font-weight:600">📅 ${dateVal} 생산분</span>
         <span style="font-size:12px;font-weight:800;color:${orderLabelColor};background:${orderLabelColor}18;border:1.5px solid ${orderLabelColor}55;border-radius:20px;padding:4px 12px">${orderLabel}</span>
+        <span style="font-size:11px;color:var(--text-dim);font-weight:700">입력범위 ${orderDetail}</span>
         <input type="date" class="date-input" value="${dateVal}"
           onchange="setStoreDateDirect('${sid}', this.value)"
           style="font-size:13px;font-weight:700;border-color:var(--accent)">
@@ -1210,7 +1208,7 @@ function renderStore(sid) {
     <div class="submit-bar" id="submitBar">
       <div>
         <div class="sb-title" id="sbTitle">${pendingCount > 0 ? `✏️ ${pendingCount}개 품목 수정됨` : '✅ 제출 완료 상태'}</div>
-        <div class="sb-desc">${orderLabel} · 제출 후에도 수량 변경 → 재제출로 수정 가능</div>
+        <div class="sb-desc">${orderLabel} · 같은 생산일 안에서는 재제출로 수정 가능</div>
       </div>
       <button class="btn btn-submit" id="submitBtn" onclick="submitStore('${sid}')">
         📤 발주 제출
@@ -1334,6 +1332,7 @@ function submitStore(sid) {
 function setStoreDateDirect(sid, dateStr) {
   if (!dateStr || storeDateOverride[sid] === dateStr) return;
   storeDateOverride[sid] = dateStr;
+  setHeaderProductionDate(dateStr);
   // qty/draft 초기화 안 함 → 입력한 수량 유지
   // 새 날짜의 Firebase 데이터 로드 후 draft 없는 칸만 업데이트됨
   subscribeStore(sid);
