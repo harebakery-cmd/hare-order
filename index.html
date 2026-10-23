@@ -253,6 +253,12 @@ tr.cat-hidden { display: none; }
 }
 .btn-submit:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,0,0,0.2); }
 .btn-submit:active { transform: translateY(0); }
+.submission-labels { display: flex; flex-direction: column; align-items: center; gap: 2px; margin-bottom: 4px; }
+.submission-label {
+  display: inline-block; max-width: 105px; padding: 2px 4px; border-radius: 4px;
+  background: #fff0f0; border: 1px solid #ffc9c9; color: #c92a2a;
+  font-size: 9px; font-weight: 800; line-height: 1.25; white-space: normal;
+}
 
 @media (max-width: 600px) {
   .submit-bar { border-radius: 10px; padding: 13px 16px; }
@@ -529,15 +535,43 @@ function setDraft(sid, p, value, badInput = false) {
   draft[sid][safeKey(p)] = parseQty(value, badInput);
 }
 
-function fbSubmitStore(sid, dateKey, changes) {
-  // 사용자가 실제로 변경한 품목만 저장한다. 화면 전체를 다시 쓰면
-  // 다른 기기에서 입력한 수량을 오래된 빈칸으로 지울 수 있다.
-  const updates = {};
-  Object.entries(changes).forEach(([k, n]) => {
-    updates[k] = n > 0 ? n : null;
-  });
-  if (Object.keys(updates).length === 0) return Promise.resolve();
-  return db.ref('qty/' + dateKey + '/' + sid).update(updates);
+function hasLegacyOrder(value) {
+  return Object.entries(value || {}).some(([key, n]) =>
+    key !== '_meta' && Number(n) > 0
+  );
+}
+
+async function fbSubmitStore(sid, dateKey, changes, expected) {
+  const ref = db.ref('qty/' + dateKey + '/' + sid);
+  const eventId = ref.child('_meta/events').push().key;
+  const result = await ref.transaction(current => {
+    // Firebase may first call this with null, then retry with the server value.
+    if (current === null && Object.values(expected).some(n => n > 0)) return null;
+    const state = current || {};
+    for (const [key] of Object.entries(changes)) {
+      if (Number(state[key] ?? 0) !== expected[key]) return;
+    }
+    if (!Object.keys(changes).length && (state._meta || hasLegacyOrder(state))) return;
+    const previous = state._meta || {};
+    const revision = Number.isSafeInteger(previous.revision)
+      ? previous.revision + 1 : (hasLegacyOrder(state) ? 1 : 0);
+    const next = { ...state };
+    Object.entries(changes).forEach(([key, n]) => {
+      if (n > 0) next[key] = n;
+      else delete next[key];
+    });
+    const events = { ...(previous.events || {}) };
+    events[eventId] = { revision, at: firebase.database.ServerValue.TIMESTAMP };
+    // Keep the initial submission and the latest 20 amendments.
+    const amendments = Object.entries(events)
+      .filter(([, event]) => event.revision > 0)
+      .sort((a, b) => a[1].revision - b[1].revision);
+    amendments.slice(0, -20).forEach(([key]) => { delete events[key]; });
+    next._meta = { revision, events };
+    return next;
+  }, undefined, false);
+  if (!result.committed) throw new Error('Order changed on another device');
+  return eventId;
 }
 
 db.ref('.info/connected').on('value', snap => {
@@ -661,6 +695,10 @@ function showStoreSkeleton(sid) {
 }
 
 function updateSummaryTable() {
+  stores.forEach(s => {
+    const header = document.querySelector(`.submission-labels[data-sid="${s.id}"]`);
+    if (header) header.innerHTML = renderSubmissionLabels(s.id);
+  });
   const tbody = document.getElementById('summaryTbody');
   if (!tbody) {
     renderMain();
@@ -988,6 +1026,40 @@ function getSortedStoreProds(sid) {
 // ══════════════════════════════════════════════
 let summaryShowAll = true;
 
+function submissionTime(value) {
+  const at = Number(value);
+  if (!Number.isFinite(at) || at <= 0) return '시간 확인 중';
+  return new Intl.DateTimeFormat('ko-KR', {
+    timeZone: 'Asia/Seoul', hour: 'numeric', minute: '2-digit', hour12: true
+  }).format(new Date(at));
+}
+
+function renderSubmissionLabels(sid) {
+  const order = summaryQty[sid] || {};
+  const meta = order._meta;
+  if (!meta) {
+    return hasLegacyOrder(order)
+      ? '<span class="submission-label">기존 제출 · 시각 미기록</span>' : '';
+  }
+  const events = Object.values(meta.events || {})
+    .filter(event => Number.isSafeInteger(event.revision))
+    .sort((a, b) => a.revision - b.revision);
+  const first = events.find(event => event.revision === 0);
+  const edits = events.filter(event => event.revision > 0);
+  const visible = [
+    ...(first ? [first] : []),
+    ...edits.slice(-3)
+  ];
+  const omitted = edits.length - Math.min(edits.length, 3);
+  return [
+    !first && meta.revision > 0 ? '<span class="submission-label">기존 제출 · 시각 미기록</span>' : '',
+    omitted > 0 ? `<span class="submission-label">이전 수정 ${omitted}회</span>` : '',
+    ...visible.map(event =>
+      `<span class="submission-label">${event.revision === 0 ? '기본 제출' : event.revision + '차 수정'} ${submissionTime(event.at)}</span>`
+    )
+  ].join('');
+}
+
 function renderSummary() {
   const { catOrder, catProds } = getMasterOrder();
   const colCount = stores.length + 2;
@@ -1011,7 +1083,7 @@ function renderSummary() {
     ${stores.map(s => {
           const shortMap = {'갤러리아점': '갤백'};
           const short = shortMap[s.label] || (s.label.endsWith('점') ? s.label.slice(0,-1).slice(0,2) : s.label.slice(0,2));
-          return `<th title="${s.label}">${short}</th>`;
+          return `<th title="${s.label}"><div class="submission-labels" data-sid="${s.id}">${renderSubmissionLabels(s.id)}</div>${short}</th>`;
         }).join('')}
     <th class="th-total">합</th>
   </tr>`;
@@ -1167,8 +1239,8 @@ function renderStore(sid) {
     </div>
     <div class="submit-bar" id="submitBar">
       <div>
-        <div class="sb-title" id="sbTitle">${pendingCount > 0 ? `✏️ ${pendingCount}개 품목 수정됨` : '변경된 수량 없음'}</div>
-        <div class="sb-desc">${orderLabel} · 같은 생산일 안에서는 재제출로 수정 가능</div>
+        <div class="sb-title" id="sbTitle">${pendingCount > 0 ? `✏️ ${pendingCount}개 품목 수정됨` : (!qty[sid]?._meta && !hasLegacyOrder(qty[sid]) ? '기본 제출 전' : '변경된 수량 없음')}</div>
+        <div class="sb-desc">${orderLabel} · 첫 제출은 기본, 이후 변경은 1차·2차 수정</div>
       </div>
       <button class="btn btn-submit" id="submitBtn" onclick="submitStore('${sid}')">
         📤 발주 제출
@@ -1192,11 +1264,13 @@ function updateSubmitBar(sid) {
   const titleEl = document.getElementById('sbTitle');
   if (!titleEl) return;
   const count = countPending(sid);
-  titleEl.textContent = count > 0 ? `✏️ ${count}개 품목 수정됨` : '변경된 수량 없음';
+  titleEl.textContent = count > 0 ? `✏️ ${count}개 품목 수정됨`
+    : (!qty[sid]?._meta && !hasLegacyOrder(qty[sid]) ? '기본 제출 전' : '변경된 수량 없음');
   const btn = document.getElementById('submitBtn');
   if (btn) {
-    btn.style.opacity = count > 0 ? '1' : '0.5';
-    btn.style.transform = count > 0 ? '' : 'none';
+    const canSubmitEmpty = !qty[sid]?._meta && !hasLegacyOrder(qty[sid]);
+    btn.style.opacity = count > 0 || canSubmitEmpty ? '1' : '0.5';
+    btn.style.transform = count > 0 || canSubmitEmpty ? '' : 'none';
   }
 }
 
@@ -1208,14 +1282,14 @@ function onQtyInput(inp, sid, p) {
   inp.setCustomValidity(Number.isSafeInteger(draft[sid][safeKey(p)]) ? '' : '0 이상의 정수를 입력하세요');
   updateSubmitBar(sid);
 }
-function showSubmitConfirmation(store, dateKey, changes) {
+function showSubmitConfirmation(store, dateKey, changes, label) {
   const wrap = document.getElementById('toastWrap');
   const el = document.createElement('div');
   el.className = 'toast';
   el.setAttribute('role', 'dialog');
   el.setAttribute('aria-label', '발주 제출 확인');
   const title = document.createElement('div');
-  title.textContent = `${store.label} · ${dateKey} 생산분 · ${Object.keys(changes).length}개 품목을 저장할까요?`;
+  title.textContent = `${store.label} · ${dateKey} 생산분 · ${label} (${Object.keys(changes).length}개 품목)을 저장할까요?`;
   const actions = document.createElement('div');
   actions.style.cssText = 'display:flex;justify-content:flex-end;gap:8px;margin-top:10px';
   const cancel = document.createElement('button');
@@ -1242,10 +1316,18 @@ async function submitStore(sid) {
     toast('수량은 0 이상의 정수로 입력해 주세요', 'error'); return;
   }
   const changes = {};
+  const expected = {};
   Object.entries(allDraft).forEach(([k, n]) => {
-    if (n !== (qty[sid]?.[k] ?? 0)) changes[k] = n;
+    const oldValue = Number(qty[sid]?.[k] ?? 0);
+    if (n !== oldValue) {
+      changes[k] = n;
+      expected[k] = oldValue;
+    }
   });
-  if (!Object.keys(changes).length) { toast('변경한 수량이 없습니다'); return; }
+  const initial = !qty[sid]?._meta && !hasLegacyOrder(qty[sid]);
+  if (!Object.keys(changes).length && !initial) {
+    toast('변경한 수량이 없습니다'); return;
+  }
   const names = new Map();
   for (const prods of Object.values(masterProducts)) {
     for (const p of prods) {
@@ -1257,7 +1339,8 @@ async function submitStore(sid) {
     }
   }
   confirming = true;
-  const confirmed = await showSubmitConfirmation(store, dateKey, changes);
+  const proposedLabel = initial ? '기본 제출' : '수정 제출';
+  const confirmed = await showSubmitConfirmation(store, dateKey, changes, proposedLabel);
   confirming = false;
   if (!confirmed) return;
   const currentDraft = draft[sid] || {};
@@ -1270,10 +1353,11 @@ async function submitStore(sid) {
   const btn = document.getElementById('submitBtn');
   if (btn) { btn.textContent = '⏳ 제출 중...'; btn.disabled = true; }
   try {
-    await fbSubmitStore(sid, dateKey, changes);
+    const eventId = await fbSubmitStore(sid, dateKey, changes, expected);
     const snap = await db.ref('qty/' + dateKey + '/' + sid).once('value');
     const saved = snap.val() || {};
-    if (Object.entries(changes).some(([k, n]) => (saved[k] ?? 0) !== n)) {
+    const event = saved._meta?.events?.[eventId];
+    if (!event || Object.entries(changes).some(([k, n]) => Number(saved[k] ?? 0) !== n)) {
       throw new Error('Saved values differ');
     }
     lastSubmittedDate = dateKey;
@@ -1290,9 +1374,12 @@ async function submitStore(sid) {
         updateSubmitBar(sid);
       }
     }
-    toast(`✅ ${store.label} ${dateKey} 발주 저장·확인 완료`, 'success');
+    const label = event.revision === 0 ? '기본 제출' : `${event.revision}차 수정`;
+    toast(`✅ ${store.label} ${dateKey} ${label} 저장 완료`, 'success');
   } catch (error) {
-    toast('⚠️ 저장 확인 실패 — 입력값을 유지했습니다. 연결 상태를 확인하고 다시 제출해 주세요', 'error');
+    toast(error.message === 'Order changed on another device'
+      ? '⚠️ 다른 기기에서 수량이 바뀌었습니다. 입력값을 확인한 뒤 다시 제출해 주세요'
+      : '⚠️ 저장 확인 실패 — 입력값을 유지했습니다. 연결 상태를 확인하고 다시 제출해 주세요', 'error');
   } finally {
     submitting = false;
     if (btn && btn.isConnected) { btn.textContent = '📤 발주 제출'; btn.disabled = false; }
