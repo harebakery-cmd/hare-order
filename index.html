@@ -525,32 +525,15 @@ function setDraft(sid, p, v) {
   // updateSubmitBar는 onQtyInput의 디바운스에서 호출
 }
 
-function fbSubmitStore(sid) {
-  // 현재 DOM input 전체 값으로 저장
-  // (수정버튼으로 일부 저장 후 draft 일부 비어있어도 전체 반영)
+function fbSubmitStore(sid, dateKey, changes) {
+  // 사용자가 실제로 변경한 품목만 저장한다. 화면 전체를 다시 쓰면
+  // 다른 기기에서 입력한 수량을 오래된 빈칸으로 지울 수 있다.
   const updates = {};
-
-  document.querySelectorAll(`.num-input[data-sid="${sid}"]`).forEach(inp => {
-    const k = safeKey(inp.getAttribute('data-prod'));
-    if (inp.disabled) {
-      updates[k] = null;
-      return;
-    }
-    const n = parseInt(inp.value) || 0;
+  Object.entries(changes).forEach(([k, n]) => {
     updates[k] = n > 0 ? n : null;
   });
-
-  // DOM input이 없으면 (렌더 전) draft 기반으로 fallback
-  if (Object.keys(updates).length === 0) {
-    const d = draft[sid] || {};
-    Object.keys(d).forEach(k => {
-      const n = d[k] ?? 0;
-      updates[k] = n > 0 ? n : null;
-    });
-  }
-
   if (Object.keys(updates).length === 0) return Promise.resolve();
-  return storeQtyRef(sid).update(updates);
+  return db.ref('qty/' + dateKey + '/' + sid).update(updates);
 }
 
 db.ref('.info/connected').on('value', snap => {
@@ -1301,27 +1284,28 @@ function onQtyInput(inp, sid, p) {
 
 function submitStore(sid) {
   const store = stores.find(s => s.id === sid);
+  const dateKey = getStoreDate(sid);
+  const changes = { ...(draft[sid] || {}) };
+  if (Object.keys(changes).length === 0) {
+    toast('변경한 수량이 없습니다', 'success');
+    return;
+  }
   const btn = document.getElementById('submitBtn');
   if (btn) { btn.textContent = '⏳ 제출 중...'; btn.disabled = true; }
 
-  fbSubmitStore(sid).then(() => {
-    lastSubmittedDate = getStoreDate(sid);
-    // DOM 전체 input → qty[sid] 반영 + modifiedItems 추가 + draft 초기화
-    if (!qty[sid]) qty[sid] = {};
-    document.querySelectorAll(`.num-input[data-sid="${sid}"]`).forEach(inp => {
-      const k = safeKey(inp.getAttribute('data-prod'));
-      if (inp.disabled) {
-        delete qty[sid][k];
-        return;
-      }
-      const n = parseInt(inp.value) || 0;
-      if (n > 0) qty[sid][k] = n;
-      else delete qty[sid][k];
-    });
-    draft[sid] = {};
-    const titleEl = document.getElementById('sbTitle');
-    if (titleEl) titleEl.textContent = '✅ 제출 완료';
-    if (btn) { btn.textContent = '📤 발주 제출'; btn.disabled = false; btn.style.opacity = '1'; }
+  fbSubmitStore(sid, dateKey, changes).then(() => {
+    lastSubmittedDate = dateKey;
+    // 제출 후 추가로 입력한 값은 유지하고, 제출한 값만 로컬에 반영한다.
+    if (getStoreDate(sid) === dateKey) {
+      if (!qty[sid]) qty[sid] = {};
+      Object.entries(changes).forEach(([k, n]) => {
+        if (n > 0) qty[sid][k] = n;
+        else delete qty[sid][k];
+        if (draft[sid]?.[k] === n) delete draft[sid][k];
+      });
+      updateSubmitBar(sid);
+    }
+    if (btn) { btn.textContent = '📤 발주 제출'; btn.disabled = false; }
     toast(`✅ ${store.label} 발주 제출 완료! 수정하려면 수량을 바꾸고 다시 제출하세요`, 'success');
   }).catch(() => {
     toast('⚠️ 제출 실패 — 네트워크를 확인해주세요', 'error');
@@ -1330,11 +1314,17 @@ function submitStore(sid) {
 }
 
 function setStoreDateDirect(sid, dateStr) {
-  if (!dateStr || storeDateOverride[sid] === dateStr) return;
+  const previousDate = getStoreDate(sid);
+  if (!dateStr || previousDate === dateStr) return;
+  if (countPending(sid) > 0 &&
+      !confirm('저장하지 않은 수량이 있습니다. 날짜를 바꾸면 입력 중인 수량이 사라집니다. 계속할까요?')) {
+    renderMain();
+    return;
+  }
+  draft[sid] = {};
+  delete qty[sid];
   storeDateOverride[sid] = dateStr;
   setHeaderProductionDate(dateStr);
-  // qty/draft 초기화 안 함 → 입력한 수량 유지
-  // 새 날짜의 Firebase 데이터 로드 후 draft 없는 칸만 업데이트됨
   subscribeStore(sid);
 }
 
