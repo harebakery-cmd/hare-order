@@ -1850,5 +1850,25 @@ function showScrollHintIfMobile() {
 init();
 initTouchDrag();
 </script>
+<script>
+/* Portal-managed order items are appended as a dedicated category.
+   Existing store products and saved order history are left untouched. */
+window.addEventListener('message',function(event){
+  if(event.source!==window.parent||event.origin!==location.origin)return;
+  var message=event.data;
+  if(!message||message.type!=='hare-workspace:module-config'||message.moduleId!=='hare-order')return;
+  var incoming=Array.isArray(message.settings&&message.settings.items)?message.settings.items.map(function(x){return String(x||'').trim();}).filter(Boolean):[];
+  var category='포털 관리 품목';
+  if(incoming.length)masterProducts[category]=Array.from(new Set(incoming));
+  else delete masterProducts[category];
+  stores.forEach(function(store){
+    var storeProducts=products[store.id]||{};
+    if(incoming.length)storeProducts[category]=masterProducts[category];
+    else delete storeProducts[category];
+    products[store.id]=storeProducts;
+  });
+  if(currentTab!=='__admin__'){buildTabs();renderMain();}
+});
+</script>
 </body>
 </html>
